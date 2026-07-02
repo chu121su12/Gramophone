@@ -46,6 +46,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.akanework.gramophone.R
 import org.akanework.gramophone.logic.getBooleanStrict
+import org.akanework.gramophone.logic.getIntStrict
 import org.akanework.gramophone.logic.getStringStrict
 import org.akanework.gramophone.logic.hasAudioPermission
 import org.akanework.gramophone.logic.hasScopedStorageV1
@@ -56,6 +57,7 @@ import org.akanework.gramophone.logic.startAnimation
 import org.akanework.gramophone.logic.ui.BaseActivity
 import org.akanework.gramophone.logic.ui.placeholderScaleToFit
 import org.akanework.gramophone.logic.utils.CalculationUtils.convertDurationToTimeStamp
+import org.akanework.gramophone.logic.utils.CenterCutAudioProcessor
 import org.akanework.gramophone.logic.utils.Flags
 import org.akanework.gramophone.logic.utils.ReplayGainAudioProcessor
 import org.akanework.gramophone.logic.utils.exoplayer.GramophoneExtractorsFactory
@@ -161,11 +163,31 @@ class AudioPreviewActivity : BaseActivity(), View.OnClickListener {
         }
         // TODO de-dupe
         val rgAp = ReplayGainAudioProcessor()
+        val centerCutAp = CenterCutAudioProcessor().apply {
+            setMode(
+                CenterCutAudioProcessor.Mode.fromPreferenceValue(
+                    prefs.getStringStrict("stereo_processing", "0")
+                )
+            )
+            setFftMode(prefs.getBooleanStrict("stereo_processing_fft", true))
+            setFftSize(
+                prefs.getIntStrict(
+                    "stereo_processing_fft_size",
+                    CenterCutAudioProcessor.DEFAULT_FFT_SIZE
+                )
+            )
+            setBlend(
+                prefs.getFloat(
+                    "stereo_processing_blend",
+                    CenterCutAudioProcessor.DEFAULT_BLEND
+                )
+            )
+        }
         player = ExoPlayer.Builder(
             this,
             GramophoneRenderFactory(
                 this,
-                rgAp, {}, {})
+                rgAp, centerCutAp, {}, {})
                 .setPcmEncodingRestrictionLifted(true)
                 .setEnableDecoderFallback(true)
                 .setEnableAudioTrackPlaybackParams(true)
@@ -194,7 +216,7 @@ class AudioPreviewActivity : BaseActivity(), View.OnClickListener {
                         TrackSelectionParameters.AudioOffloadPreferences.Builder()
                             .apply {
                                 val config = prefs.getStringStrict("offload", "0")?.toIntOrNull()
-                                if (config != null && config > 0 && Flags.OFFLOAD) {
+                                if (config != null && config > 0 && Flags.OFFLOAD && !centerCutAp.blocksOffload) {
                                     rgAp.setOffloadEnabled(true)
                                     setAudioOffloadMode(TrackSelectionParameters.AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_ENABLED)
                                     setIsGaplessSupportRequired(config == 2)

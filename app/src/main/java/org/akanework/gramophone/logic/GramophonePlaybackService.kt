@@ -119,6 +119,7 @@ import org.akanework.gramophone.logic.utils.AfFormatInfo
 import org.akanework.gramophone.logic.utils.AfFormatTracker
 import org.akanework.gramophone.logic.utils.AudioTrackInfo
 import org.akanework.gramophone.logic.utils.BtCodecInfo
+import org.akanework.gramophone.logic.utils.CenterCutAudioProcessor
 import org.akanework.gramophone.logic.utils.CircularShuffleOrder
 import org.akanework.gramophone.logic.utils.Flags
 import org.akanework.gramophone.logic.utils.LastPlayedManager
@@ -208,6 +209,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
     private var lastSentHighlightedLyric: String? = null
     private lateinit var afFormatTracker: AfFormatTracker
     private lateinit var rgAp: ReplayGainAudioProcessor
+    private lateinit var centerCutAp: CenterCutAudioProcessor
     private var rgMode = 0 // 0 = disabled, 1 = track, 2 = album, 3 = smart
     private var updatedLyricAtLeastOnce = false
     private val downstreamFormat = hashSetOf<Pair<Any, Pair<Int, Format>>>()
@@ -371,13 +373,14 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
             }
         }
         rgAp = ReplayGainAudioProcessor()
+        centerCutAp = CenterCutAudioProcessor()
         prefs.registerOnSharedPreferenceChangeListener(this)
         onSharedPreferenceChanged(prefs, null) // read initial values
         val player = EndedWorkaroundPlayer(
             exoPlayer = ExoPlayer.Builder(
                 this,
                 GramophoneRenderFactory(
-                    this, rgAp, this::onAudioSinkInputFormatChanged,
+                    this, rgAp, centerCutAp, this::onAudioSinkInputFormatChanged,
                     afFormatTracker::setAudioSink
                 )
                     .setPcmEncodingRestrictionLifted(true)
@@ -405,17 +408,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                         buildUponParameters()
                         .setAllowInvalidateSelectionsOnRendererCapabilitiesChange(true)
                         .setAudioOffloadPreferences(
-                            TrackSelectionParameters.AudioOffloadPreferences.Builder()
-                                .apply {
-                                    val config =
-                                        prefs.getStringStrict("offload", "0")?.toIntOrNull()
-                                    if (config != null && config > 0 && Flags.OFFLOAD) {
-                                        rgAp.setOffloadEnabled(true)
-                                        setAudioOffloadMode(TrackSelectionParameters.AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_ENABLED)
-                                        setIsGaplessSupportRequired(config == 2)
-                                    }
-                                }
-                                .build()))
+                            buildAudioOffloadPreferences()))
                 })
                 .setPlaybackLooper(internalPlaybackThread.looper)
                 .build(),
@@ -627,6 +620,21 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                 }
         }
         Log.i(TAG, "-onCreate()")
+    }
+
+    private fun buildAudioOffloadPreferences(): TrackSelectionParameters.AudioOffloadPreferences {
+        return TrackSelectionParameters.AudioOffloadPreferences.Builder()
+            .apply {
+                val config =
+                    prefs.getStringStrict("offload", "0")?.toIntOrNull()
+                val isOffloadEnabled = config != null && config > 0 && Flags.OFFLOAD && !centerCutAp.blocksOffload
+                rgAp.setOffloadEnabled(true)
+                if (isOffloadEnabled) {
+                    setAudioOffloadMode(TrackSelectionParameters.AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_ENABLED)
+                    setIsGaplessSupportRequired(config == 2)
+                }
+            }
+            .build()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -844,6 +852,39 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
 
     override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences, key: String?) {
         var restart = false
+        if (
+            key == null ||
+            key == "stereo_processing" ||
+            key == "stereo_processing_fft" ||
+            key == "stereo_processing_fft_size" ||
+            key == "stereo_processing_blend"
+        ) {
+            val wasBlockingOffload = centerCutAp.blocksOffload
+            val stereoProcessing = prefs.getStringStrict("stereo_processing", "0")
+            val cutMode = CenterCutAudioProcessor.Mode.fromPreferenceValue(stereoProcessing)
+            val changedMode = centerCutAp.setMode(cutMode)
+            val changedFftMode = centerCutAp.setFftMode(
+                prefs.getBooleanStrict("stereo_processing_fft", true)
+            )
+            val changedFftSize = centerCutAp.setFftSize(
+                prefs.getIntStrict(
+                    "stereo_processing_fft_size",
+                    CenterCutAudioProcessor.DEFAULT_FFT_SIZE
+                )
+            )
+            val changedBlend = centerCutAp.setBlend(
+                prefs.getFloat(
+                    "stereo_processing_blend",
+                    CenterCutAudioProcessor.DEFAULT_BLEND
+                )
+            )
+            val changed = changedMode || changedFftMode || changedFftSize || changedBlend
+            if (changed && wasBlockingOffload != centerCutAp.blocksOffload) {
+                updateAudioOffloadPreferences()
+                val config = prefs.getStringStrict("offload", "0")?.toIntOrNull()
+                restart = config != null && config > 0 && Flags.OFFLOAD
+            }
+        }
         if (key == null || key == "rg_mode") {
             rgMode = prefs.getStringStrict("rg_mode", "0")!!.toInt()
             restart = !computeRgMode(true)
@@ -864,10 +905,21 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
             val boostGain = prefs.getIntStrict("rg_boost_gain", 0)
             restart = !rgAp.setBoostGain(boostGain) || restart
         }
+        if (key == "offload") {
+            updateAudioOffloadPreferences()
+        }
         if (restart) {
             controller?.stop()
             controller?.prepare()
         }
+    }
+
+    private fun updateAudioOffloadPreferences() {
+        val player = endedWorkaroundPlayer?.exoPlayer ?: return
+        player.trackSelectionParameters = player.trackSelectionParameters
+            .buildUpon()
+            .setAudioOffloadPreferences(buildAudioOffloadPreferences())
+            .build()
     }
 
     private fun computeRgMode(force: Boolean): Boolean {

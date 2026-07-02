@@ -27,9 +27,11 @@ import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.CheckBox
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.SeekBar
+import android.widget.Spinner
 import android.widget.TextView
 import androidx.activity.viewModels
 import androidx.appcompat.app.AlertDialog
@@ -109,6 +111,7 @@ import org.akanework.gramophone.logic.utils.AudioFormatDetector.AudioFormatInfo
 import org.akanework.gramophone.logic.utils.AudioFormatDetector.AudioQuality
 import org.akanework.gramophone.logic.utils.AudioFormatDetector.SpatialFormat
 import org.akanework.gramophone.logic.utils.CalculationUtils
+import org.akanework.gramophone.logic.utils.CenterCutAudioProcessor
 import org.akanework.gramophone.logic.utils.ColorUtils
 import org.akanework.gramophone.logic.utils.Flags
 import org.akanework.gramophone.ui.MainActivity
@@ -156,6 +159,7 @@ class FullBottomSheet
         const val BACKGROUND_COLOR_TRANSITION_SEC: Long = 300
         const val FOREGROUND_COLOR_TRANSITION_SEC: Long = 150
         const val LYRIC_FADE_TRANSITION_SEC: Long = 125
+        private const val CENTER_CUT_BLEND_APPLY_DEBOUNCE_MS: Long = 250
         private const val TAG = "FullBottomSheet"
     }
 
@@ -243,6 +247,7 @@ class FullBottomSheet
     private val bottomSheetPlaylistButton: MaterialButton
     private val bottomSheetTimerButton: MaterialButton
     private val bottomSheetPlaybackSpeedButton: MaterialButton
+    private val bottomSheetStereoProcessingButton: MaterialButton
     private val bottomSheetFavoriteButton: MaterialButton
     val bottomSheetLyricButton: MaterialButton
     private val bottomSheetFullSeekBar: SeekBar
@@ -270,6 +275,7 @@ class FullBottomSheet
         bottomSheetLoopButton = findViewById(R.id.sheet_loop)
         bottomSheetTimerButton = findViewById(R.id.timer)
         bottomSheetPlaybackSpeedButton = findViewById(R.id.playback_speed)
+        bottomSheetStereoProcessingButton = findViewById(R.id.stereo_processing)
         bottomSheetFavoriteButton = findViewById(R.id.favor)
         bottomSheetPlaylistButton = findViewById(R.id.playlist)
         bottomSheetLyricButton = findViewById(R.id.lyrics)
@@ -481,6 +487,11 @@ class FullBottomSheet
             ViewCompat.performHapticFeedback(it, HapticFeedbackConstantsCompat.CONTEXT_CLICK)
             if (instance != null)
                 showPlaybackSpeedDialog()
+        }
+        bottomSheetStereoProcessingButton.setOnClickListener {
+            ViewCompat.performHapticFeedback(it, HapticFeedbackConstantsCompat.CONTEXT_CLICK)
+            if (instance != null)
+                showStereoProcessingDialog()
         }
 
         bottomSheetFavoriteButton.addOnCheckedChangeListener(this)
@@ -843,6 +854,263 @@ class FullBottomSheet
                 instance?.playbackParameters = PlaybackParameters(1f, 1f)
             }
             .show()
+    }
+
+    private fun showStereoProcessingDialog() {
+        val context = wrappedContext ?: context
+        val entries = context.resources.getStringArray(R.array.stereo_processing_switch)
+        val values = context.resources.getStringArray(R.array.stereo_processing_switch_val)
+        val checkedItem = values.indexOf(prefs.getString("stereo_processing", "0"))
+            .takeIf { it >= 0 } ?: 0
+        val channelCount =
+            currentFormat?.audioSinkInputFormat?.channelCount?.takeIf { it > 0 }
+                ?: currentFormat?.downstreamFormat
+                    ?.firstOrNull { it.first == C.TRACK_TYPE_AUDIO }
+                    ?.second?.first?.channelCount?.takeIf { it > 0 }
+        val stereoProcessingAvailabilityIcon = when (channelCount) {
+            null -> R.drawable.ic_warning
+            2 -> R.drawable.ic_check
+            else -> R.drawable.ic_warning
+        }
+        lateinit var fftCheckbox: MaterialCheckBox
+        lateinit var blendText: TextView
+        lateinit var blendSlider: Slider
+        lateinit var fftSizeLabel: TextView
+        lateinit var fftSizeSpinner: Spinner
+        var controlsReady = false
+
+        fun modalLayoutParams(): LinearLayout.LayoutParams {
+            return LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        fun inlineControlLayoutParams(): LinearLayout.LayoutParams {
+            return LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        val controlStartInset = 8.dpToPx(context)
+
+        fun updateFftControls() {
+            if (!controlsReady) {
+                return
+            }
+            val stereoProcessingEnabled = prefs.getString("stereo_processing", "0") != "0"
+            val fftSizeEnabled =
+                stereoProcessingEnabled && fftCheckbox.isChecked
+            fftCheckbox.isEnabled = stereoProcessingEnabled
+            blendText.isEnabled = stereoProcessingEnabled
+            blendSlider.isEnabled = stereoProcessingEnabled
+            fftSizeLabel.isEnabled = fftSizeEnabled
+            fftSizeSpinner.isEnabled = fftSizeEnabled
+        }
+
+        val centerCutAdapter = ArrayAdapter(
+            context, android.R.layout.simple_spinner_item,
+            entries
+        ).apply {
+            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        }
+
+        val channelCountText = TextView(context).apply {
+            text = context.getString(
+                R.string.stereo_processing_channel_count,
+                channelCount?.toString() ?: "?"
+            )
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            textSize = 16f
+            layoutParams = inlineControlLayoutParams().apply {
+                marginEnd = 4.dpToPx(context)
+            }
+        }
+        val channelCountStatus = ImageView(context).apply {
+            setImageResource(stereoProcessingAvailabilityIcon)
+            layoutParams = LinearLayout.LayoutParams(
+                18.dpToPx(context),
+                18.dpToPx(context)
+            )
+        }
+        val channelCountRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            layoutParams = modalLayoutParams().apply {
+                marginStart = controlStartInset
+                bottomMargin = 4.dpToPx(context)
+            }
+            addView(channelCountText)
+            addView(channelCountStatus)
+        }
+        val centerCutSpinner = Spinner(context).apply {
+            adapter = centerCutAdapter
+            setSelection(checkedItem, false)
+            setPadding(
+                paddingLeft, 8.dpToPx(context),
+                paddingRight, 8.dpToPx(context)
+            )
+            layoutParams = inlineControlLayoutParams().apply {
+                bottomMargin = 4.dpToPx(context)
+            }
+            onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(
+                    parent: AdapterView<*>?,
+                    view: View?,
+                    position: Int,
+                    id: Long
+                ) {
+                    if (prefs.getString("stereo_processing", "0") != values[position]) {
+                        prefs.edit {
+                            putString("stereo_processing", values[position])
+                        }
+                    }
+                    updateFftControls()
+                }
+
+                override fun onNothingSelected(parent: AdapterView<*>?) {}
+            }
+        }
+        blendSlider = Slider(context).apply {
+            valueFrom = 0f
+            valueTo = 1f
+            stepSize = 0.01f
+            value = prefs.getFloat(
+                "stereo_processing_blend",
+                CenterCutAudioProcessor.DEFAULT_BLEND
+            ).coerceIn(valueFrom, valueTo)
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).also { layoutParams = it }
+        }
+        blendText = TextView(context).apply {
+            text = context.getString(R.string.center_cut_blend_value, blendSlider.value)
+            gravity = Gravity.CENTER
+            textSize = 16f
+            layoutParams = modalLayoutParams()
+        }
+        var pendingBlendValue = blendSlider.value
+        var applyPendingBlendRunnable: Runnable? = null
+        fun applyPendingBlendValue() {
+            applyPendingBlendRunnable?.let { blendSlider.removeCallbacks(it) }
+            if (prefs.getFloat(
+                    "stereo_processing_blend",
+                    CenterCutAudioProcessor.DEFAULT_BLEND
+                ) != pendingBlendValue
+            ) {
+                prefs.edit {
+                    putFloat("stereo_processing_blend", pendingBlendValue)
+                }
+            }
+        }
+        applyPendingBlendRunnable = Runnable {
+            applyPendingBlendValue()
+        }
+        blendSlider.addOnChangeListener { _, value, fromUser ->
+            blendText.text = context.getString(R.string.center_cut_blend_value, value)
+            if (fromUser) {
+                pendingBlendValue = value
+                applyPendingBlendRunnable?.let { runnable ->
+                    blendSlider.removeCallbacks(runnable)
+                    blendSlider.postDelayed(runnable, CENTER_CUT_BLEND_APPLY_DEBOUNCE_MS)
+                }
+            }
+        }
+        blendSlider.addOnSliderTouchListener(object : Slider.OnSliderTouchListener {
+            override fun onStartTrackingTouch(slider: Slider) {}
+
+            override fun onStopTrackingTouch(slider: Slider) {
+                pendingBlendValue = slider.value
+                applyPendingBlendValue()
+            }
+        })
+        fftCheckbox = MaterialCheckBox(context).apply {
+            text = context.getString(R.string.center_cut_fft)
+            isChecked = prefs.getBooleanStrict("stereo_processing_fft", true)
+            setOnCheckedChangeListener { _, isChecked ->
+                prefs.edit {
+                    putBoolean("stereo_processing_fft", isChecked)
+                }
+                updateFftControls()
+            }
+            layoutParams = inlineControlLayoutParams()
+        }
+        val fftSizes = CenterCutAudioProcessor.ALLOWED_FFT_SIZES
+        val selectedFftSize = prefs.getIntStrict(
+            "stereo_processing_fft_size",
+            CenterCutAudioProcessor.DEFAULT_FFT_SIZE
+        )
+        val fftSizeAdapter = ArrayAdapter(
+            context, android.R.layout.simple_spinner_item,
+            fftSizes.toList()
+        ).apply {
+            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        }
+        fftSizeLabel = TextView(context).apply {
+            text = context.getString(R.string.center_cut_fft_size)
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            textSize = 16f
+            layoutParams = inlineControlLayoutParams().apply {
+                marginEnd = 8.dpToPx(context)
+            }
+        }
+        fftSizeSpinner = Spinner(context).apply {
+            adapter = fftSizeAdapter
+            setSelection(fftSizes.indexOf(selectedFftSize).takeIf { it >= 0 } ?: 1, false)
+            layoutParams = inlineControlLayoutParams()
+            onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(
+                    parent: AdapterView<*>?,
+                    view: View?,
+                    position: Int,
+                    id: Long
+                ) {
+                    if (prefs.getInt("stereo_processing_fft_size", 0) != fftSizes[position]) {
+                        prefs.edit {
+                            putInt("stereo_processing_fft_size", fftSizes[position])
+                        }
+                    }
+                }
+
+                override fun onNothingSelected(parent: AdapterView<*>?) {}
+            }
+        }
+        val fftSizeRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            layoutParams = modalLayoutParams().apply {
+                marginStart = controlStartInset
+            }
+            addView(fftSizeLabel)
+            addView(fftSizeSpinner)
+        }
+        controlsReady = true
+        updateFftControls()
+
+        val container = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(
+                48.dpToPx(context), 16.dpToPx(context),
+                48.dpToPx(context), 0
+            )
+            addView(channelCountRow)
+            addView(centerCutSpinner)
+            addView(blendText)
+            addView(blendSlider)
+            addView(fftCheckbox)
+            addView(fftSizeRow)
+        }
+
+        MaterialAlertDialogBuilder(context)
+            .setTitle(R.string.stereo_processing)
+            .setView(NestedScrollView(context).apply { addView(container) })
+            .setPositiveButton(android.R.string.ok) { _, _ -> }
+            .show()
+            .setOnDismissListener {
+                applyPendingBlendValue()
+            }
     }
 
     fun onStop() {
@@ -1245,6 +1513,8 @@ class FullBottomSheet
                         ColorStateList.valueOf(progressColor)
                     bottomSheetPlaybackSpeedButton.iconTint =
                         ColorStateList.valueOf(progressColor)
+                    bottomSheetStereoProcessingButton.iconTint =
+                        ColorStateList.valueOf(progressColor)
                     bottomSheetPlaylistButton.iconTint =
                         ColorStateList.valueOf(progressColor)
                     bottomSheetLyricButton.iconTint =
@@ -1358,6 +1628,8 @@ class FullBottomSheet
             bottomSheetTimerButton.iconTint =
                 ColorStateList.valueOf(colorOnSurface)
             bottomSheetPlaybackSpeedButton.iconTint =
+                ColorStateList.valueOf(colorOnSurface)
+            bottomSheetStereoProcessingButton.iconTint =
                 ColorStateList.valueOf(colorOnSurface)
             bottomSheetPlaylistButton.iconTint =
                 ColorStateList.valueOf(colorOnSurface)
