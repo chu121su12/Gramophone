@@ -47,6 +47,9 @@ import kotlin.properties.Delegates
 import kotlin.time.toDuration
 
 private const val TAG = "NewLyricsView"
+private const val PRE_LINE_DOT_COUNT_MAX = 3
+private const val PRE_LINE_DOT_STEP_MS = 1000L
+private const val PRE_LINE_DOT_MIN_GAP_MS = PRE_LINE_DOT_STEP_MS * PRE_LINE_DOT_COUNT_MAX
 
 class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(context, attrs),
     GestureDetector.OnGestureListener, GestureDetector.OnDoubleTapListener {
@@ -235,6 +238,8 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
             applyTypefaces()
         if (key == "lyric_text_size")
             applySize()
+        if (key == "lyric_pre_line_dots")
+            stateOverrides.clear()
         spForRender = null
         spForMeasure = null
         requestLayout()
@@ -720,12 +725,10 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
     }
 
     fun buildSpForMeasure(lyrics: SemanticLyrics?, width: Int): Pair<IntArray, List<SbItem>> {
-        val lines =
-            lyrics?.unsyncedText ?: listOf(context.getString(R.string.no_lyric_found) to null)
-        val syncedLines = (lyrics as? SemanticLyrics.SyncedLyrics?)?.text
+        val lines = buildDisplayLines(lyrics)
         var lastNonTranslated: SemanticLyrics.LyricLine? = null
         val spLines = lines.mapIndexed { i, it ->
-            val syncedLine = syncedLines?.get(i)
+            val syncedLine = it.line
             if (syncedLine?.isTranslated != true)
                 lastNonTranslated = syncedLine
             val words =
@@ -738,8 +741,8 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
                             findBidirectionalBarriers(syncedLine.text).firstOrNull()?.second == true
                         )
                     ) else null
-            val sb = SpannableStringBuilder(it.first)
-            val speaker = syncedLine?.speaker ?: it.second
+            val sb = SpannableStringBuilder(it.text)
+            val speaker = syncedLine?.speaker ?: it.speaker
             val align =
                 if (prefs.getBooleanStrict("lyric_center", false) || speaker?.isGroup == true)
                     Layout.Alignment.ALIGN_CENTER
@@ -751,8 +754,8 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
             // TODO: width limiting to 85% if there is >1 singer
             //val widthLimit = speaker?.isWidthLimited == true
             val paddingTop = if (tl) paddingVerticalTl else paddingVerticalDefault
-            val paddingBottom = if (i + 1 < (syncedLines?.size ?: -1) &&
-                syncedLines?.get(i + 1)?.isTranslated == true
+            val paddingBottom = if (i + 1 < lines.size &&
+                lines[i + 1].line?.isTranslated == true
             ) paddingVerticalTl else paddingVerticalDefault
             val layout = StaticLayoutBuilderCompat.obtain(
                 sb, when {
@@ -1047,4 +1050,169 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
         val line: SemanticLyrics.LyricLine?
     )
 
+    private data class DisplayLine(
+        val text: String,
+        val speaker: SpeakerEntity?,
+        val line: SemanticLyrics.LyricLine?
+    )
+
+    private fun SemanticLyrics.LyricLine.toDisplayLine() = DisplayLine(text, speaker, this)
+
+    private fun buildDisplayLines(lyrics: SemanticLyrics?): List<DisplayLine> {
+        if (lyrics !is SemanticLyrics.SyncedLyrics) {
+            return (lyrics?.unsyncedText ?: listOf(
+                context.getString(R.string.no_lyric_found) to null
+            )).map { DisplayLine(it.first, it.second, null) }
+        }
+        val sourceLines = lyrics.text
+        if (!prefs.getBooleanStrict(
+                "lyric_pre_line_dots",
+                prefs.getBooleanStrict("lyric_ui_v2", true)
+            )
+        ) {
+            return sourceLines.map { it.toDisplayLine() }
+        }
+
+        val songDuration = Long.MAX_VALUE
+        val filteredLines = sourceLines.filter { !it.text.isRemovableLyricLine() }
+        val gapIntervals = mutableListOf<Long>()
+        var previousMainLine: SemanticLyrics.LyricLine? = null
+        filteredLines.forEach { line ->
+            if (line.isMainTimingLine()) {
+                val gapDuration = generateGapData(previousMainLine, line, songDuration).duration
+                if (gapDuration > 0L) gapIntervals.add(gapDuration)
+                previousMainLine = line
+            }
+        }
+        val shortGapMax = findPreLineGapTiming(gapIntervals)
+        val lines = mutableListOf<DisplayLine>()
+        previousMainLine = null
+        filteredLines.forEach { line ->
+            if (line.isMainTimingLine()) {
+                lines.addAll(generateGapFillers(shortGapMax, previousMainLine, line, songDuration))
+                previousMainLine = line
+            }
+            lines.add(DisplayLine(line.text, line.speaker, line))
+        }
+        previousMainLine?.let {
+            lines.addAll(generateGapFillers(shortGapMax, it, null, songDuration))
+        }
+        return lines.ifEmpty { sourceLines.map { it.toDisplayLine() } }
+    }
+
+    private fun findPreLineGapTiming(intervals: List<Long>): Long {
+        val newIntervals = intervals.let { if (it.size > 2) it.drop(1).dropLast(1) else it }
+            .filter { it >= PRE_LINE_DOT_MIN_GAP_MS }
+            .sorted().let { if (it.size > 2) it.drop(1).dropLast(1) else it }
+        if (newIntervals.size <= 1)
+            return PRE_LINE_DOT_MIN_GAP_MS
+        val (bestLow, bestHigh) = newIntervals.zipWithNext()
+            .mapIndexed { index, pair -> index to pair }
+            .filter { (index, _) ->
+                val lowerClusterSize = index + 1
+                val upperClusterSize = newIntervals.size - lowerClusterSize
+                lowerClusterSize > 1 && upperClusterSize > 1
+            }
+            .maxByOrNull { (_, pair) -> pair.second - pair.first }
+            ?.second
+            ?: return newIntervals.last()
+        val bestJump = bestHigh - bestLow
+        return if (bestJump >= PRE_LINE_DOT_STEP_MS * 1.5 && bestLow > 0L &&
+            bestHigh.toDouble() / bestLow.toDouble() >= 1.5
+        ) {
+            bestLow
+        } else {
+            newIntervals.last()
+        }
+    }
+
+    private data class GapData(
+        val previousStart: Long,
+        val gapStart: Long,
+        val gapEnd: Long
+    ) {
+        val start: Long
+            get() = if (previousStart == 0L) previousStart else gapStart
+        val duration: Long
+            get() = gapEnd - start
+    }
+
+    private fun generateGapData(
+        previousLine: SemanticLyrics.LyricLine?,
+        currentLine: SemanticLyrics.LyricLine?,
+        songDuration: Long
+    ): GapData {
+        val previousStart = min(previousLine?.start?.toLongClamped() ?: 0L, songDuration)
+        val gapStart = previousLine?.let {
+            if (it.endIsImplicit) {
+                val leadMs = PRE_LINE_DOT_MIN_GAP_MS * 2
+                if (previousStart > songDuration - leadMs) songDuration
+                else previousStart + leadMs
+            } else {
+                val previousEnd = it.end.toLongClamped().coerceAtLeast(previousStart)
+                if (previousEnd > songDuration - PRE_LINE_DOT_STEP_MS) songDuration
+                else previousEnd + PRE_LINE_DOT_STEP_MS
+            }
+        } ?: 0L
+        val nextStart = min(currentLine?.start?.toLongClamped() ?: songDuration, songDuration)
+        return GapData(previousStart, gapStart, nextStart)
+    }
+
+    private fun generateGapFillers(
+        shortGapMax: Long,
+        previousLine: SemanticLyrics.LyricLine?,
+        currentLine: SemanticLyrics.LyricLine?,
+        songDuration: Long
+    ): List<DisplayLine> {
+        val gap = generateGapData(previousLine, currentLine, songDuration)
+        val dots = mutableListOf<Pair<Long, Int>>()
+        if (currentLine == null) {
+            if (songDuration < Long.MAX_VALUE && songDuration - gap.gapEnd < shortGapMax) {
+                return emptyList()
+            }
+            // always add trailing dots
+        } else {
+            val minGap = if (previousLine == null) PRE_LINE_DOT_STEP_MS else shortGapMax
+            if (gap.duration < minGap) {
+                return emptyList()
+            }
+            var limit = PRE_LINE_DOT_COUNT_MAX
+            var dotEnd = gap.gapEnd
+            while (--limit >= 0) {
+                dotEnd -= PRE_LINE_DOT_STEP_MS
+                if (dotEnd <= gap.gapStart)
+                    break
+                dots.add(dotEnd to 1)
+            }
+        }
+        dots.add(gap.start to if (previousLine == null || currentLine == null) 3 else 2)
+        dots.reverse()
+        val speaker = currentLine?.speaker ?: previousLine?.speaker
+        return dots.mapIndexed { i, (start, dotCount) ->
+            val end = dots.getOrNull(i + 1)?.first ?: gap.gapEnd
+            val text = (0..<dotCount).joinToString("\u00A0\u00A0") { "•" }
+            val line = SemanticLyrics.LyricLine(
+                text, start.toULong(), end.toULong(), true, null, speaker, false
+            )
+            DisplayLine(text, speaker, line)
+        }
+    }
+
+    private fun String.isRemovableLyricLine(): Boolean {
+        return all {
+            it in setOf('♩', '♪', '♫', '♬', '\uFE0E', '\uFE0F') ||
+                    Character.isWhitespace(it) ||
+                    Character.isSpaceChar(it) ||
+                    Character.getType(it) == Character.FORMAT.toInt()
+        }
+    }
+
+    private fun SemanticLyrics.LyricLine.isMainTimingLine(): Boolean {
+        return !text.isRemovableLyricLine() && text.isNotBlank() &&
+                !isTranslated && speaker?.isBackground != true
+    }
+
+    private fun ULong.toLongClamped(): Long {
+        return coerceAtMost(Long.MAX_VALUE.toULong()).toLong()
+    }
 }

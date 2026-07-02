@@ -74,6 +74,15 @@
         app:iconSpaceReserved="false" />
 
     <SwitchPreferenceCompat
+        android:defaultValue="true"
+        android:key="lyric_pre_line_dots"
+        android:layout="@layout/preference_switch"
+        android:summary="@string/settings_lyrics_pre_line_dots_summary"
+        android:title="@string/settings_lyrics_pre_line_dots"
+        android:widgetLayout="@layout/preference_switch_widget"
+        app:iconSpaceReserved="false" />
+
+    <SwitchPreferenceCompat
         android:defaultValue="false"
         android:key="translation_auto_word"
         android:layout="@layout/preference_switch"
