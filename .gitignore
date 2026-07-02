@@ -10,3 +10,6 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+/*.jks
+/app/src/main/dictionary/*/cache
