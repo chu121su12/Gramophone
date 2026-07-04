@@ -18,7 +18,9 @@
 package org.akanework.gramophone.ui.fragments.settings
 
 import android.os.Bundle
+import androidx.preference.Preference
 import org.akanework.gramophone.R
+import org.akanework.gramophone.logic.utils.LyricsTransliterator
 import org.akanework.gramophone.ui.fragments.BasePreferenceFragment
 import org.akanework.gramophone.ui.fragments.BaseSettingsActivity
 
@@ -29,5 +31,7 @@ class LyricSettingsActivity : BaseSettingsActivity(
 class LyricSettingsFragment : BasePreferenceFragment() {
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
         setPreferencesFromResource(R.xml.settings_lyric, rootKey)
+        findPreference<Preference>("lyric_auto_transliteration_note")?.isVisible =
+            LyricsTransliterator.isAvailable()
     }
 }

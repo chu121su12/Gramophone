@@ -472,7 +472,8 @@ sealed class SemanticLyrics : Parcelable {
         var endIsImplicit: Boolean,
         val words: MutableList<Word>?,
         var speaker: SpeakerEntity?,
-        var isTranslated: Boolean
+        var isTranslated: Boolean,
+        var isAutoTransliteration: Boolean = false
     ) : Parcelable {
         val isClickable: Boolean
             get() = text.isNotBlank()

@@ -19,6 +19,8 @@ plugins {
     id("pt.jcosta.resourceplaceholders")
 }
 
+apply(from = "$rootDir/gradle/japanese-dictionary.gradle.kts")
+
 android {
     val packageProperties = readProperties(file("../package.properties"))
     fun resolveProperties(property: String): String? {
@@ -211,6 +213,9 @@ android {
     }
 
     sourceSets {
+        getByName("main") {
+            res.srcDir(layout.buildDirectory.dir("generated/res/japaneseIpadic").get().asFile)
+        }
         getByName("debug") {
             // This does NOT remove src/debug/ source sets, hence "debug" is a superset of "userdebug"
             // TODO it seems this broke and that caused Reflections to crash

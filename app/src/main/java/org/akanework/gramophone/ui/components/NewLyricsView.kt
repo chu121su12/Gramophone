@@ -36,6 +36,7 @@ import org.akanework.gramophone.logic.ui.spans.StaticLayoutBuilderCompat
 import org.akanework.gramophone.logic.utils.CalculationUtils.lerp
 import org.akanework.gramophone.logic.utils.CalculationUtils.lerpInv
 import org.akanework.gramophone.logic.utils.Flags
+import org.akanework.gramophone.logic.utils.LyricsTransliterator
 import org.akanework.gramophone.logic.utils.SemanticLyrics
 import org.akanework.gramophone.logic.utils.SpeakerEntity
 import org.akanework.gramophone.logic.utils.findBidirectionalBarriers
@@ -79,6 +80,7 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
     private var spForRender: Pair<IntArray, List<SbItem>>? = null
     private var spForMeasure: Pair<IntArray, List<SbItem>>? = null
     private var lyrics: SemanticLyrics? = null
+    private var displayLines: List<DisplayLine>? = null
     private var posForRender = 0uL
     lateinit var instance: Callbacks
     private val gestureDetector = GestureDetector(context, this)
@@ -217,6 +219,7 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
     }
 
     fun updateLyrics(parsedLyrics: SemanticLyrics?) {
+        displayLines = buildDisplayLines(parsedLyrics)
         spForRender = null
         spForMeasure = null
         requestLayout()
@@ -238,8 +241,10 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
             applyTypefaces()
         if (key == "lyric_text_size")
             applySize()
-        if (key == "lyric_pre_line_dots")
+        if (key == "lyric_auto_transliteration" || key == "lyric_pre_line_dots") {
+            displayLines = buildDisplayLines(lyrics)
             stateOverrides.clear()
+        }
         spForRender = null
         spForMeasure = null
         requestLayout()
@@ -308,10 +313,11 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
             var wordIdx: Int? = null
             var gradientProgress = Float.NEGATIVE_INFINITY
             val firstTs = it.line?.start ?: ULong.MIN_VALUE
+            val isExtraLyricLine = it.isExtraLyricLine
             var lastTs = min(it.line?.end ?: Int.MAX_VALUE.toULong(), Int.MAX_VALUE.toULong())
             var endIsImplicit = it.line?.endIsImplicit != false
-            if (Flags.IGNORE_SMALL_ENDTIME_GAPS && it.line?.start != null && (!it.line.isTranslated
-                        && it.theWords == null || it.line.isTranslated && spForRender!!.second
+            if (Flags.IGNORE_SMALL_ENDTIME_GAPS && it.line?.start != null && (!isExtraLyricLine
+                        && it.theWords == null || isExtraLyricLine && spForRender!!.second
                     .subList(0, i).find { l -> l.line?.start == it.line.start }?.theWords == null)) {
                 val j = spForRender!!.second.subList(i, spForRender!!.second.size).find { l ->
                     (l.line?.start ?: Int.MAX_VALUE.toULong()) > it.line.start }?.line?.start
@@ -420,7 +426,7 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
                 timeOffsetForUse > 0f && it.line != null && isPlaying
             )
                 animating = true
-            if (it.line?.isTranslated != true && it.speaker?.isBackground != true) {
+            if (!it.isExtraLyricLine && it.speaker?.isBackground != true) {
                 if (determineTimeUntilNext) {
                     determineTimeUntilNext = false
                     timeUntilNext = max(0uL, (it.line?.start ?: 0uL) - posForRender)
@@ -431,7 +437,7 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
                 firstScrollTarget = heightSoFarWithoutTranslated.toInt() to i
                 determineTimeUntilNext = true
             }
-            if (posForRender >= fadeInStart && it.line?.isTranslated != true
+            if (posForRender >= fadeInStart && !it.isExtraLyricLine
                 && it.speaker?.isBackground != true
             ) {
                 lastScrollTarget = heightSoFar.toInt() to i
@@ -445,9 +451,9 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
             //  their main line and are animated exactly the same.
             if (delayedScrollAnimation != null && delayedScrollAnimation!!.second.first < i &&
                 !delayedScrollDoneForFrame && spForRender!!.second.subList(delayedScrollAnimation!!
-                    .second.first + 1, i + 1).find { it.line?.isTranslated != true } != null) {
+                    .second.first + 1, i + 1).find { !it.isExtraLyricLine } != null) {
                 val ii = spForRender!!.second.subList(delayedScrollAnimation!!.second.first + 1,
-                    i + 1).sumOf { if (it.line?.isTranslated == true) 0 else 1 }
+                    i + 1).sumOf { if (it.isExtraLyricLine) 0 else 1 }
                 val duration = lyricAnimTime * 0.278
                 val durationReturn = lyricAnimTime * 0.722
                 val durationStep = lyricAnimTime * 0.1
@@ -547,10 +553,10 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
                     timeOffsetForUse > 0f
             var colorSpan = it.text.getSpans<MyForegroundColorSpan>().firstOrNull()
             val cachedEnd = colorSpan?.let { j -> it.text.getSpanEnd(j) } ?: -1
-            val wordActiveSpanForLine = if (it.line?.isTranslated == true)
+            val wordActiveSpanForLine = if (it.isExtraLyricLine)
                 wordActiveTlSpan else wordActiveSpan
             val col = if (!culled) {
-                val highlightColorForLine = if (it.line?.isTranslated == true)
+                val highlightColorForLine = if (it.isExtraLyricLine)
                     highlightTlTextColor else highlightTextColor
                 if (inColorAnim) ColorUtils.blendARGB(
                     if (scaleOutProgress in 0f..1f) highlightColorForLine else
@@ -601,7 +607,7 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
             val gradientSpanStart = gradientSpan?.let { j -> it.text.getSpanStart(j) } ?: -1
             val gradientSpanEnd = gradientSpan?.let { j -> it.text.getSpanEnd(j) } ?: -1
             if (gradientSpanStart != realGradientStart || gradientSpanEnd != realGradientEnd) {
-                val gradientSpanPoolForLine = if (it.line?.isTranslated == true)
+                val gradientSpanPoolForLine = if (it.isExtraLyricLine)
                     gradientTlSpanPool else gradientSpanPool
                 if (gradientSpanStart != -1) {
                     it.text.removeSpan(gradientSpan!!)
@@ -615,7 +621,7 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
                 if (realGradientStart != -1) {
                     if (gradientSpan == null)
                         gradientSpan = gradientSpanPoolForLine.removeFirstOrNull()
-                            ?: if (it.line?.isTranslated == true) makeGradientTlSpan()
+                            ?: if (it.isExtraLyricLine) makeGradientTlSpan()
                             else makeGradientSpan()
                     it.text.setSpan(
                         gradientSpan, realGradientStart, realGradientEnd,
@@ -725,38 +731,51 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
     }
 
     fun buildSpForMeasure(lyrics: SemanticLyrics?, width: Int): Pair<IntArray, List<SbItem>> {
-        val lines = buildDisplayLines(lyrics)
+        val lines = displayLines ?: buildDisplayLines(lyrics).also { displayLines = it }
         var lastNonTranslated: SemanticLyrics.LyricLine? = null
         val spLines = lines.mapIndexed { i, it ->
             val syncedLine = it.line
-            if (syncedLine?.isTranslated != true)
+            val isAutoTransliteration = it.isAutoTransliterationRow
+            if (!syncedLine.isExtraLyricLine())
                 lastNonTranslated = syncedLine
-            val words =
-                syncedLine?.words ?: if (prefs.getBooleanStrict("translation_auto_word", false) &&
-                    syncedLine?.isTranslated == true && lastNonTranslated?.words != null
+            val previousNonTranslated = lastNonTranslated
+            val nextLine = lines.getOrNull(i + 1)
+            val previousLine = lines.getOrNull(i - 1)
+            val extraLineWords =
+                if (prefs.getBooleanStrict("translation_auto_word", false) &&
+                    it.isExtraLyricLine && !isAutoTransliteration &&
+                    previousNonTranslated?.words != null && it.text.isNotEmpty()
                 )
                     listOf(
                         SemanticLyrics.Word(
-                            lastNonTranslated.timeRange, 0..<syncedLine.text.length,
-                            findBidirectionalBarriers(syncedLine.text).firstOrNull()?.second == true
+                            previousNonTranslated.timeRange,
+                            0..<it.text.length,
+                            findBidirectionalBarriers(it.text).firstOrNull()?.second == true
                         )
-                    ) else null
+                    )
+                else null
+            val words =
+                if (isAutoTransliteration) null
+                else syncedLine?.words ?: extraLineWords
             val sb = SpannableStringBuilder(it.text)
-            val speaker = syncedLine?.speaker ?: it.speaker
+            val speaker = it.speaker
             val align =
                 if (prefs.getBooleanStrict("lyric_center", false) || speaker?.isGroup == true)
                     Layout.Alignment.ALIGN_CENTER
                 else if (speaker?.isVoice2 == true)
                     Layout.Alignment.ALIGN_OPPOSITE
                 else Layout.Alignment.ALIGN_NORMAL
-            val tl = syncedLine?.isTranslated == true
+            val tl = it.isExtraLyricLine
             val bg = speaker?.isBackground == true
             // TODO: width limiting to 85% if there is >1 singer
             //val widthLimit = speaker?.isWidthLimited == true
-            val paddingTop = if (tl) paddingVerticalTl else paddingVerticalDefault
-            val paddingBottom = if (i + 1 < lines.size &&
-                lines[i + 1].line?.isTranslated == true
-            ) paddingVerticalTl else paddingVerticalDefault
+            val sticksToPrevious = previousLine?.isAutoTransliterationRow == true && !tl
+            val sticksToNext = isAutoTransliteration && nextLine?.isExtraLyricLine == false
+            val paddingTop = if ((tl && !isAutoTransliteration) || sticksToPrevious)
+                paddingVerticalTl else paddingVerticalDefault
+            val paddingBottom = if ((nextLine?.isExtraLyricLine == true &&
+                        !nextLine.isAutoTransliterationRow) || sticksToNext)
+                paddingVerticalTl else paddingVerticalDefault
             val layout = StaticLayoutBuilderCompat.obtain(
                 sb, when {
                     tl && bg -> translationBackgroundTextPaint
@@ -840,7 +859,7 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
                                 listOf(line)
                         }
                     }.flatten()
-                }, speaker, syncedLine
+                }, speaker, syncedLine, it.isGeneratedAutoTransliteration
             )
         }
         val heights = spLines.map { it.layout.height + it.paddingTop + it.paddingBottom }
@@ -848,7 +867,7 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
                 paddingBottom - paddingTop) / 6 else
             context.resources.getDimensionPixelSize(R.dimen.lyric_top_padding)
         val lastIdx = spLines.indexOfLast { it.speaker?.isBackground != true &&
-                it.line?.isTranslated != true }.takeIf { it != -1 }
+                !it.isExtraLyricLine }.takeIf { it != -1 }
         val globalPaddingBottom = if (lyrics is SemanticLyrics.SyncedLyrics) max(0,
             ((measuredHeight - paddingBottom - paddingTop) * (5f / 6f)).toInt() -
                     (lastIdx?.let { heights.subList(it, heights.size).sum() } ?: 0))
@@ -892,10 +911,11 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
     fun handleSeek(from: ULong, to: ULong) {
         spForRender?.second?.forEachIndexed { i, it ->
             val firstTs = it.line?.start ?: ULong.MIN_VALUE
+            val isExtraLyricLine = it.isExtraLyricLine
             var lastTs = min(it.line?.end ?: Int.MAX_VALUE.toULong(), Int.MAX_VALUE.toULong())
             var endIsImplicit = it.line?.endIsImplicit != false
-            if (Flags.IGNORE_SMALL_ENDTIME_GAPS && it.line?.start != null && (!it.line.isTranslated
-                        && it.theWords == null || it.line.isTranslated && spForRender!!.second
+            if (Flags.IGNORE_SMALL_ENDTIME_GAPS && it.line?.start != null && (!isExtraLyricLine
+                        && it.theWords == null || isExtraLyricLine && spForRender!!.second
                     .subList(0, i).find { l -> l.line?.start == it.line.start }?.theWords == null)) {
                 val j = spForRender!!.second.subList(i, spForRender!!.second.size).find { l ->
                     (l.line?.start ?: Int.MAX_VALUE.toULong()) > it.line.start }?.line?.start
@@ -1047,57 +1067,125 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
         val layout: StaticLayout, val text: SpannableStringBuilder,
         val paddingTop: Int, val paddingBottom: Int, val theWords: List<SemanticLyrics.Word>?,
         val words: List<List<Int>>?, val rlm: List<Int>?, val speaker: SpeakerEntity?,
-        val line: SemanticLyrics.LyricLine?
-    )
+        val line: SemanticLyrics.LyricLine?,
+        val isGeneratedAutoTransliteration: Boolean
+    ) {
+        val isExtraLyricLine: Boolean
+            get() = line?.isTranslated == true || line?.isAutoTransliteration == true ||
+                    isGeneratedAutoTransliteration
+    }
 
     private data class DisplayLine(
         val text: String,
         val speaker: SpeakerEntity?,
-        val line: SemanticLyrics.LyricLine?
-    )
+        val line: SemanticLyrics.LyricLine?,
+        val isGeneratedAutoTransliteration: Boolean = false
+    ) {
+        val isAutoTransliterationRow: Boolean
+            get() = line?.isAutoTransliteration == true || isGeneratedAutoTransliteration
 
-    private fun SemanticLyrics.LyricLine.toDisplayLine() = DisplayLine(text, speaker, this)
+        val isExtraLyricLine: Boolean
+            get() = line?.isTranslated == true || isAutoTransliterationRow
+    }
+
+    private fun SemanticLyrics.LyricLine.toDisplayLine(): DisplayLine {
+        return DisplayLine(text, speaker, this)
+    }
 
     private fun buildDisplayLines(lyrics: SemanticLyrics?): List<DisplayLine> {
+        val hasTransliterator = LyricsTransliterator.isAvailable()
+        val lyricAutoTransliterationEnabled =
+            prefs.getBooleanStrict("lyric_auto_transliteration", false)
         if (lyrics !is SemanticLyrics.SyncedLyrics) {
-            return (lyrics?.unsyncedText ?: listOf(
+            val unsyncedLines = lyrics?.unsyncedText ?: listOf(
                 context.getString(R.string.no_lyric_found) to null
-            )).map { DisplayLine(it.first, it.second, null) }
+            )
+            val transliterator = if (lyrics != null && hasTransliterator &&
+                lyricAutoTransliterationEnabled) {
+                LyricsTransliterator.create(
+                    context,
+                    unsyncedLines.map { it.first }
+                )
+            } else null
+            return buildList {
+                unsyncedLines.forEach { (text, speaker) ->
+                    if (!text.isRemovableLyricLine()) {
+                        transliterator?.transliterate(text)?.let { transliterated ->
+                            add(DisplayLine(transliterated, speaker, null,
+                                isGeneratedAutoTransliteration = true))
+                        }
+                    }
+                    add(DisplayLine(text, speaker, null))
+                }
+            }
         }
-        val sourceLines = lyrics.text
+        val timingLines by lazy { lyrics.text.filterNot { it.text.isRemovableLyricLine() } }
+        val sourceLines by lazy {
+            timingLines.filter { !it.isTranslated && !it.isAutoTransliteration }
+        }
+        fun createTransliterator(): LyricsTransliterator? {
+            if (!hasTransliterator)
+                return null
+            return LyricsTransliterator.create(context, sourceLines.map { it.text })
+        }
+        val lyricLines = if (lyricAutoTransliterationEnabled) {
+            buildList {
+                val transliterator = createTransliterator()
+                lyrics.text.forEach { line ->
+                    if (!line.isTranslated && !line.isAutoTransliteration &&
+                        !line.text.isRemovableLyricLine()) {
+                        createSyntheticTransliteration(transliterator, line)?.let {
+                            add(it)
+                        }
+                    }
+                    add(line.toDisplayLine())
+                }
+            }
+        } else lyrics.text
+            .filterNot { it.isTranslated || it.isAutoTransliteration }
+            .map { it.toDisplayLine() }
         if (!prefs.getBooleanStrict(
                 "lyric_pre_line_dots",
                 prefs.getBooleanStrict("lyric_ui_v2", true)
             )
         ) {
-            return sourceLines.map { it.toDisplayLine() }
+            return lyricLines
         }
 
         val songDuration = Long.MAX_VALUE
-        val filteredLines = sourceLines.filter { !it.text.isRemovableLyricLine() }
+        val mainLines = lyricLines
+            .mapNotNull { it.line }
+            .filter { it.isMainTimingLine() }
         val gapIntervals = mutableListOf<Long>()
         var previousMainLine: SemanticLyrics.LyricLine? = null
-        filteredLines.forEach { line ->
-            if (line.isMainTimingLine()) {
-                val gapDuration = generateGapData(previousMainLine, line, songDuration).duration
-                if (gapDuration > 0L) gapIntervals.add(gapDuration)
-                previousMainLine = line
-            }
+        mainLines.forEach { line ->
+            val gapDuration = generateGapData(previousMainLine, line, songDuration).duration
+            if (gapDuration > 0L) gapIntervals.add(gapDuration)
+            previousMainLine = line
         }
         val shortGapMax = findPreLineGapTiming(gapIntervals)
         val lines = mutableListOf<DisplayLine>()
         previousMainLine = null
-        filteredLines.forEach { line ->
-            if (line.isMainTimingLine()) {
-                lines.addAll(generateGapFillers(shortGapMax, previousMainLine, line, songDuration))
-                previousMainLine = line
+        var gapAddedFor: SemanticLyrics.LyricLine? = null
+        lyricLines.forEachIndexed { i, displayLine ->
+            val line = displayLine.line!!
+            if (!line.text.isRemovableLyricLine()) {
+                val mainLine = if (displayLine.isAutoTransliterationRow)
+                    lyricLines.getOrNull(i + 1)?.line?.takeIf { it.isMainTimingLine() }
+                else line.takeIf { it.isMainTimingLine() }
+                if (mainLine != null && gapAddedFor !== mainLine) {
+                    lines.addAll(generateGapFillers(shortGapMax, previousMainLine, mainLine, songDuration))
+                    gapAddedFor = mainLine
+                }
+                lines.add(displayLine)
+                if (line === mainLine)
+                    previousMainLine = line
             }
-            lines.add(DisplayLine(line.text, line.speaker, line))
         }
         previousMainLine?.let {
             lines.addAll(generateGapFillers(shortGapMax, it, null, songDuration))
         }
-        return lines.ifEmpty { sourceLines.map { it.toDisplayLine() } }
+        return lines.ifEmpty { lyricLines }
     }
 
     private fun findPreLineGapTiming(intervals: List<Long>): Long {
@@ -1170,7 +1258,6 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
             if (songDuration < Long.MAX_VALUE && songDuration - gap.gapEnd < shortGapMax) {
                 return emptyList()
             }
-            // always add trailing dots
         } else {
             val minGap = if (previousLine == null) PRE_LINE_DOT_STEP_MS else shortGapMax
             if (gap.duration < minGap) {
@@ -1207,12 +1294,35 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
         }
     }
 
-    private fun SemanticLyrics.LyricLine.isMainTimingLine(): Boolean {
-        return !text.isRemovableLyricLine() && text.isNotBlank() &&
-                !isTranslated && speaker?.isBackground != true
-    }
-
     private fun ULong.toLongClamped(): Long {
         return coerceAtMost(Long.MAX_VALUE.toULong()).toLong()
     }
+
+    private fun SemanticLyrics.LyricLine.isMainTimingLine(): Boolean {
+        return text.isNotBlank() && !text.isRemovableLyricLine() &&
+                !this.isExtraLyricLine() && speaker?.isBackground != true
+    }
+
+    private fun SemanticLyrics.LyricLine?.isExtraLyricLine(): Boolean {
+        return this?.isTranslated == true || this?.isAutoTransliteration == true
+    }
+
+    private fun createSyntheticTransliteration(
+        transliterator: LyricsTransliterator?,
+        line: SemanticLyrics.LyricLine
+    ): DisplayLine? {
+        val transliterated = transliterator?.transliterate(line.text) ?: return null
+        val transliteratedLine = line.copy(
+            text = transliterated,
+            words = null,
+            isTranslated = false,
+            isAutoTransliteration = true
+        )
+        return DisplayLine(
+            transliterated,
+            line.speaker,
+            transliteratedLine
+        )
+    }
+
 }

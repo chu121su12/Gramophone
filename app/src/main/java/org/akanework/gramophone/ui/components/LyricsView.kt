@@ -213,6 +213,7 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
             adapter?.onPrefsChanged()
         if (key == "lyric_center" || key == "lyric_bold" || key == "lyric_no_animation" ||
             key == "translation_auto_word" || key == "lyric_text_size" ||
+            key == "lyric_auto_transliteration" ||
             key == "lyric_pre_line_dots"
         )
             newView?.onPrefsChanged(key)

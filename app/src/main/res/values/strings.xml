@@ -267,6 +267,10 @@
     <string name="settings_lyrics_center">Center alignment</string>
     <!-- Toggle in lyrics settings to make all lyrics display in center instead of left. Subtitle -->
     <string name="settings_lyrics_center_summary">Use center alignment for lyrics</string>
+    <!-- Toggle in lyrics settings for generated lyric transliteration. Title -->
+    <string name="settings_lyric_auto_transliteration">Auto transliteration</string>
+    <!-- Note below auto transliteration mode. Subtext -->
+    <string name="settings_lyric_auto_transliteration_summary">Transliteration converts scripts, not meaning. Readings may be wrong, especially names.</string>
     <!-- Toggle in behavior settings to make app start playing music when opening it. Title -->
     <string name="settings_play_on_launch">Play on launch</string>
     <!-- Toggle in behavior settings to make app start playing music when opening it. Subtitle -->
