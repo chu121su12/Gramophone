@@ -140,7 +140,7 @@ class GeneralSubFragment : BaseFragment(true) {
                 }
                 itemList = item.map { it?.songList }
                 rawOrderExposed = Sorter.Type.NaturalOrder
-                if (clazz == Playlist::class.java.name) {
+                if (clazz == Playlist::class.java.name && !mainActivity.isRemoteLibrary) {
                     topAppBar.inflateMenu(R.menu.playlist_subfragment_menu)
                     topAppBar.setOnMenuItemClickListener {
                         when (it.itemId) {

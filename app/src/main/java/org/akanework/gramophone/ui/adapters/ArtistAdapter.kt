@@ -33,6 +33,8 @@ import org.akanework.gramophone.R
 import org.akanework.gramophone.logic.getBooleanStrict
 import org.akanework.gramophone.logic.getFile
 import org.akanework.gramophone.logic.requireMediaStoreId
+import org.akanework.gramophone.logic.sharing.LibrarySharingManager
+import org.akanework.gramophone.logic.sharing.isRemoteMediaItem
 import org.akanework.gramophone.ui.MainActivity
 import org.akanework.gramophone.ui.fragments.ArtistSubFragment
 import uk.akane.libphonograph.items.Artist
@@ -86,7 +88,8 @@ class ArtistAdapter(
         popupMenu.inflate(R.menu.more_menu)
         popupMenu.menu.iterator().forEach {
             it.isVisible = it.itemId == R.id.play_next || it.itemId == R.id.add_to_queue
-                    || it.itemId == R.id.delete
+                    || (!item.songList.any { song -> song.isRemoteMediaItem() } &&
+                    it.itemId == R.id.delete)
         }
 
         popupMenu.setOnMenuItemClickListener { it1 ->
@@ -97,6 +100,7 @@ class ArtistAdapter(
                         mediaController.currentMediaItemIndex + 1,
                         item.songList,
                     )
+                    LibrarySharingManager.prefetchQueuedNext(item.songList)
                     true
                 }
 

@@ -71,7 +71,9 @@ import androidx.media3.common.util.Log
 import androidx.media3.exoplayer.source.ShuffleOrder
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionResult
 import androidx.vectordrawable.graphics.drawable.AnimatedVectorDrawableCompat
+import com.google.common.util.concurrent.ListenableFuture
 import com.google.android.material.appbar.AppBarLayout
 import com.google.android.material.appbar.CollapsingToolbarLayout
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -110,14 +112,14 @@ import java.util.Locale
 import kotlin.math.max
 
 fun Player.playOrPause() {
-    if (playWhenReady) {
-        if (playbackState == Player.STATE_ENDED)
-            seekToDefaultPosition()
-        else
-            pause()
-    } else {
-        play()
+    if (isPlaying || (playWhenReady && playbackState == Player.STATE_BUFFERING)) {
+        pause()
+        return
     }
+    if (playbackState == Player.STATE_ENDED) {
+        seekToDefaultPosition()
+    }
+    play()
 }
 
 fun MediaItem.getFile(): File? {
@@ -304,7 +306,11 @@ fun MediaController.setTimer(value: Int, waitUntilSongEnd: Boolean) {
     )
 }
 
-fun MediaController.setMediaItemsSeamlessly(items: List<MediaItem>, position: Int, title: String) {
+fun MediaController.setMediaItemsSeamlessly(
+    items: List<MediaItem>,
+    position: Int,
+    title: String
+): ListenableFuture<SessionResult> =
     sendCustomCommand(
         SessionCommand(SERVICE_SET_MEDIA_ITEMS_SEAMLESSLY, Bundle.EMPTY).apply {
             customExtras.putBinder("items", MediaItemList(items))
@@ -312,7 +318,6 @@ fun MediaController.setMediaItemsSeamlessly(items: List<MediaItem>, position: In
             customExtras.putString("title", title)
         }, Bundle.EMPTY
     )
-}
 
 inline fun <reified T> MutableList<T>.forEachSupport(skipFirst: Int = 0, operator: (T) -> Unit) {
     val li = listIterator()

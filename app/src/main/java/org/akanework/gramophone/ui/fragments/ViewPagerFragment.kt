@@ -23,17 +23,26 @@ import android.media.audiofx.AudioEffect
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ImageButton
+import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.content.res.AppCompatResources
+import androidx.appcompat.widget.PopupMenu
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager2.widget.ViewPager2
 import coil3.SingletonImageLoader
+import com.google.android.material.appbar.CollapsingToolbarLayout
 import com.google.android.material.appbar.AppBarLayout
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.color.MaterialColors
@@ -51,6 +60,7 @@ import org.akanework.gramophone.R
 import org.akanework.gramophone.logic.clone
 import org.akanework.gramophone.logic.enableEdgeToEdgePaddingListener
 import org.akanework.gramophone.logic.needsManualSnackBarInset
+import org.akanework.gramophone.logic.sharing.LibrarySharingManager
 import org.akanework.gramophone.logic.updateMargin
 import org.akanework.gramophone.logic.utils.SdScanner
 import org.akanework.gramophone.logic.queueWithTitle
@@ -82,12 +92,36 @@ class ViewPagerFragment : BaseFragment(true) {
         val rootView = inflater.inflate(R.layout.fragment_viewpager, container, false)
         val tabLayout = rootView.findViewById<TabLayout>(R.id.tab_layout)
         val topAppBar = rootView.findViewById<MaterialToolbar>(R.id.topAppBar)
+        val collapsingToolbar = rootView.findViewById<CollapsingToolbarLayout>(R.id.collapsingtoolbar)
         viewPager2 = rootView.findViewById(R.id.fragment_viewpager)
 
         appBarLayout = rootView.findViewById(R.id.appbarlayout)
         appBarLayout.enableEdgeToEdgePaddingListener()
         topAppBar.overflowIcon =
             AppCompatResources.getDrawable(requireContext(), R.drawable.ic_more_vert_alt_topappbar)
+        val activity = requireActivity() as MainActivity
+        topAppBar.menu.findItem(R.id.library_sharing_disconnect).isVisible =
+            activity.hasConnectedRemoteLibrary
+        if (activity.isRemoteLibrary) {
+            collapsingToolbar.title = getString(R.string.library_sharing_shared_library)
+            topAppBar.menu.findItem(R.id.quick_refresh).isVisible = false
+            topAppBar.menu.findItem(R.id.refresh).isVisible = false
+            requireActivity().onBackPressedDispatcher.addCallback(
+                viewLifecycleOwner,
+                object : OnBackPressedCallback(true) {
+                    override fun handleOnBackPressed() {
+                        val activity = requireActivity() as MainActivity
+                        if (!isVisible || activity.playerBottomSheet.visibleAndExpanded) {
+                            isEnabled = false
+                            activity.onBackPressedDispatcher.onBackPressed()
+                            isEnabled = true
+                            return
+                        }
+                        showLibrarySwitcherDialog()
+                    }
+                }
+            )
+        }
 
         topAppBar.setOnMenuItemClickListener { it ->
             val activity = requireActivity() as MainActivity
@@ -134,6 +168,10 @@ class ViewPagerFragment : BaseFragment(true) {
                             playerLayout,
                             runBlocking { activity.reader.songListFlow.first().size })
                     }
+                }
+
+                R.id.library_sharing_disconnect -> {
+                    showLibrarySwitcherDialog()
                 }
 
                 R.id.refresh -> {
@@ -266,6 +304,154 @@ class ViewPagerFragment : BaseFragment(true) {
         }
 
         return rootView
+    }
+
+    private fun showLibrarySwitcherDialog() {
+        val activity = requireActivity() as MainActivity
+        val remoteReader = LibrarySharingManager.connectedRemoteReader() ?: run {
+            activity.showLocalLibraryRoot()
+            return
+        }
+        val context = requireContext()
+        val container = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+        }
+        var dialog: AlertDialog? = null
+        container.addView(
+            libraryRow(getString(R.string.library_sharing_local_library)) {
+                dialog?.dismiss()
+                activity.showLocalLibraryRoot()
+            }
+        )
+        container.addView(
+            remoteLibraryRow(remoteReader.remoteLibrary.deviceName?.takeIf { it.isNotBlank() }
+                ?: getString(R.string.library_sharing_shared_library), activity) {
+                dialog?.dismiss()
+            }
+        )
+        dialog = MaterialAlertDialogBuilder(context)
+            .setTitle(R.string.library_sharing_libraries)
+            .setView(container)
+            .setNegativeButton(android.R.string.cancel) { _, _ -> }
+            .show()
+    }
+
+    private fun libraryRow(label: String, onClick: () -> Unit): View =
+        TextView(requireContext()).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(48)
+            )
+            text = label
+            textSize = 16f
+            gravity = Gravity.CENTER_VERTICAL
+            minHeight = dp(48)
+            setPadding(dp(16), 0, dp(16), 0)
+            setTextColor(MaterialColors.getColor(this, com.google.android.material.R.attr.colorOnSurface))
+            setBackgroundResource(selectableItemBackground())
+            setOnClickListener { onClick() }
+        }
+
+    private fun remoteLibraryRow(label: String, activity: MainActivity, onDismiss: () -> Unit): View =
+        LinearLayout(requireContext()).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(48)
+            )
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = dp(48)
+            setBackgroundResource(selectableItemBackground())
+
+            val title = TextView(context).apply {
+                text = label
+                textSize = 16f
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(16), 0, dp(8), 0)
+                setTextColor(MaterialColors.getColor(this, com.google.android.material.R.attr.colorOnSurface))
+                setOnClickListener {
+                    onDismiss()
+                    activity.showRemoteLibraryRoot()
+                }
+            }
+            addView(
+                title,
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+            )
+
+            val more = ImageButton(context).apply {
+                setImageResource(R.drawable.ic_more_vert_alt)
+                contentDescription = getString(R.string.more_actions)
+                background = null
+                setBackgroundResource(selectableItemBackgroundBorderless())
+                setOnClickListener { anchor ->
+                    showRemoteLibraryMenu(anchor, activity, onDismiss)
+                }
+            }
+            addView(more, LinearLayout.LayoutParams(dp(48), dp(48)))
+        }
+
+    private fun showRemoteLibraryMenu(anchor: View, activity: MainActivity, onDismiss: () -> Unit) {
+        PopupMenu(requireContext(), anchor).apply {
+            menu.add(0, R.id.refresh, 0, R.string.library_sharing_refresh_library)
+            menu.add(0, R.id.library_sharing_disconnect, 1, R.string.library_sharing_disconnect)
+            setOnMenuItemClickListener { item ->
+                when (item.itemId) {
+                    R.id.refresh -> {
+                        onDismiss()
+                        refreshSharedLibrary(activity)
+                    }
+                    R.id.library_sharing_disconnect -> {
+                        onDismiss()
+                        activity.disconnectSharedLibrary()
+                    }
+                }
+                true
+            }
+            show()
+        }
+    }
+
+    private fun refreshSharedLibrary(activity: MainActivity) {
+        val playerLayout = activity.playerBottomSheet
+        Toast.makeText(requireContext(), R.string.refreshing_wait, Toast.LENGTH_SHORT).show()
+        viewLifecycleOwner.lifecycleScope.launch {
+            runCatching { LibrarySharingManager.refreshRemoteLibrary() }
+                .onSuccess { reader ->
+                    if (activity.isRemoteLibrary) {
+                        activity.showRemoteLibraryRoot()
+                    }
+                    showRefreshDoneSnackBar(playerLayout, reader.songListFlow.first().size)
+                }
+                .onFailure {
+                    Toast.makeText(
+                        requireContext(),
+                        getString(
+                            R.string.library_sharing_connection_failed,
+                            it.message ?: it.javaClass.name
+                        ),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+        }
+    }
+
+    private fun dp(value: Int): Int =
+        (value * resources.displayMetrics.density).toInt()
+
+    private fun selectableItemBackground(): Int {
+        val attrs = requireContext().obtainStyledAttributes(
+            intArrayOf(android.R.attr.selectableItemBackground)
+        )
+        return attrs.getResourceId(0, 0).also { attrs.recycle() }
+    }
+
+    private fun selectableItemBackgroundBorderless(): Int {
+        val attrs = requireContext().obtainStyledAttributes(
+            intArrayOf(android.R.attr.selectableItemBackgroundBorderless)
+        )
+        return attrs.getResourceId(0, 0).also { attrs.recycle() }
     }
 
     fun maybeReportFullyDrawn(itemId: Int) {

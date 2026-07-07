@@ -20,6 +20,7 @@ package org.akanework.gramophone.ui.adapters
 import androidx.appcompat.widget.PopupMenu
 import androidx.fragment.app.Fragment
 import org.akanework.gramophone.R
+import org.akanework.gramophone.logic.sharing.LibrarySharingManager
 import org.akanework.gramophone.ui.MainActivity
 import org.akanework.gramophone.ui.fragments.GeneralSubFragment
 import uk.akane.libphonograph.items.Date
@@ -68,6 +69,7 @@ class DateAdapter(
                         mediaController.currentMediaItemIndex + 1,
                         item.songList,
                     )
+                    LibrarySharingManager.prefetchQueuedNext(item.songList)
                     true
                 }
 

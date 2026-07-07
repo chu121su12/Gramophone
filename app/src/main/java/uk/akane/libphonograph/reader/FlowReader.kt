@@ -59,11 +59,11 @@ class FlowReader(
     whiteListSetFlow: SharedFlow<Set<String>>,
     shouldUseEnhancedCoverReadingFlow: SharedFlow<Boolean?>, // null means load if permission is granted
     recentlyAddedFilterSecondFlow: SharedFlow<Long?>, // null means don't generate recently added
-) {
+) : LibraryReader {
     // IMPORTANT: Do not use distinctUntilChanged() or StateFlow here because equals() on thousands
     // of MediaItems is very, very expensive!
     private var awaitingRefresh = false
-    var hadFirstRefresh = false
+    override var hadFirstRefresh = false
         private set
     private val scope = CoroutineScope(Dispatchers.IO + CoroutineName("FlowReader"))
     private val finishRefreshTrigger = MutableSharedFlow<Unit>(replay = 0)
@@ -236,9 +236,9 @@ class FlowReader(
             }
             .provideReplayCacheInvalidationManager(copyDownstream = Invalidation.Optional)
             .sharePauseableIn(scope, WhileSubscribed(20000), WhileSubscribed(2000), replay = 1)
-    val idMapFlow: Flow<Map<Long, MediaItem>> = readerFlow.map { it.idMap!! }
-    val pathMapFlow = readerFlow.map { it.pathMap!! }
-    val songListFlow: Flow<List<MediaItem>> = readerFlow.map { it.songList }
+    override val idMapFlow: Flow<Map<Long, MediaItem>> = readerFlow.map { it.idMap!! }
+    override val pathMapFlow = readerFlow.map { it.pathMap!! }
+    override val songListFlow: Flow<List<MediaItem>> = readerFlow.map { it.songList }
     private val recentlyAddedFlow = recentlyAddedFilterSecondFlow.distinctUntilChanged()
         .onEach { requireReplayCacheInvalidationManager().invalidate() }
         .combine(songListFlow) { recentlyAddedFilterSecond, songList ->
@@ -256,25 +256,25 @@ class FlowReader(
         pathMapFlow.combine(rawPlaylistFlow) { pathMap, rawPlaylists ->
             rawPlaylists.mapNotNull { it.toPlaylist(pathMap) }
         }
-    val albumListFlow: Flow<List<Album>> = readerFlow.map { it.albumList!! }
-    val albumArtistListFlow: Flow<List<Artist>> = readerFlow.map { it.albumArtistList!! }
-    val artistListFlow: Flow<List<Artist>> = readerFlow.map { it.artistList!! }
-    val genreListFlow: Flow<List<Genre>> = readerFlow.map { it.genreList!! }
-    val dateListFlow: Flow<List<Date>> = readerFlow.map { it.dateList!! }
-    val playlistListFlow = combine(mappedPlaylistsFlow, recentlyAddedFlow)
+    override val albumListFlow: Flow<List<Album>> = readerFlow.map { it.albumList!! }
+    override val albumArtistListFlow: Flow<List<Artist>> = readerFlow.map { it.albumArtistList!! }
+    override val artistListFlow: Flow<List<Artist>> = readerFlow.map { it.artistList!! }
+    override val genreListFlow: Flow<List<Genre>> = readerFlow.map { it.genreList!! }
+    override val dateListFlow: Flow<List<Date>> = readerFlow.map { it.dateList!! }
+    override val playlistListFlow = combine(mappedPlaylistsFlow, recentlyAddedFlow)
     { mappedPlaylists, recentlyAdded ->
         if (recentlyAdded != null) mappedPlaylists + recentlyAdded else mappedPlaylists
     }
-    val folderStructureFlow: Flow<FileNode> = readerFlow.map { it.folderStructure!! }
-    val shallowFolderFlow: Flow<FileNode> = readerFlow.map { it.shallowFolder!! }
-    val foldersFlow: Flow<Set<String>> = readerFlow.map { it.folders!! }
-    val foldersForWhitelistFlow: Flow<Set<String>> = readerFlow.map { it.foldersForWhitelist!! }
+    override val folderStructureFlow: Flow<FileNode> = readerFlow.map { it.folderStructure!! }
+    override val shallowFolderFlow: Flow<FileNode> = readerFlow.map { it.shallowFolder!! }
+    override val foldersFlow: Flow<Set<String>> = readerFlow.map { it.folders!! }
+    override val foldersForWhitelistFlow: Flow<Set<String>> = readerFlow.map { it.foldersForWhitelist!! }
 
     /**
      * If the library hasn't been loaded yet, forces a load of the library. Otherwise forces a
      * manual refresh of the library. Suspends until new data is available.
      */
-    suspend fun refresh() {
+    override suspend fun refresh() {
         hadFirstRefresh = true
         coroutineScope {
             if (!awaitingRefresh) {

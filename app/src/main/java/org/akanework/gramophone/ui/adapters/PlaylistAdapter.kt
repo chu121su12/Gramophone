@@ -49,6 +49,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.akanework.gramophone.R
 import org.akanework.gramophone.logic.gramophoneApplication
+import org.akanework.gramophone.logic.sharing.LibrarySharingManager
+import org.akanework.gramophone.ui.MainActivity
 import org.akanework.gramophone.ui.PlaylistPickerActivity
 import org.akanework.gramophone.ui.fragments.AdapterFragment
 import org.akanework.gramophone.ui.fragments.GeneralSubFragment
@@ -71,8 +73,10 @@ class PlaylistAdapter(
 ) : BaseAdapter<Playlist>
     (
     fragment,
-    liveData = (fragment?.requireActivity() ?: fallbackContext)!!
-        .gramophoneApplication.reader.playlistListFlow.let {
+    liveData = ((fragment?.requireActivity() as? MainActivity)?.reader
+        ?: (fallbackContext as? MainActivity)?.reader
+        ?: (fragment?.requireActivity() ?: fallbackContext)!!.gramophoneApplication.reader)
+        .playlistListFlow.let {
             if (isSubFragment == R.id.songs)
                 it.map { playlistsList ->
                     playlistsList.filter { p -> p.id != null && p.path != null }
@@ -145,8 +149,9 @@ class PlaylistAdapter(
 
     override fun onMenu(item: Playlist, popupMenu: PopupMenu) {
         popupMenu.inflate(R.menu.more_menu)
-        val canRename = item.title != null
-        val canDelete = item.id != null
+        val readonly = mainActivity.isRemoteLibrary
+        val canRename = item.title != null && !readonly
+        val canDelete = item.id != null && !readonly
         popupMenu.menu.iterator().forEach {
             it.isVisible = it.itemId == R.id.play_next || it.itemId == R.id.add_to_queue
                     || (canRename && it.itemId == R.id.rename)
@@ -160,6 +165,7 @@ class PlaylistAdapter(
                         mediaController.currentMediaItemIndex + 1,
                         item.songList,
                     )
+                    LibrarySharingManager.prefetchQueuedNext(item.songList)
                 }
 
                 R.id.add_to_queue -> {
@@ -303,7 +309,8 @@ class PlaylistAdapter(
             payloads: List<Any?>
         ) {
             super.onBindViewHolder(holder, position, payloads)
-            holder.createPlaylist.visibility = View.VISIBLE
+            holder.createPlaylist.visibility = if (mainActivity.isRemoteLibrary) View.GONE
+            else View.VISIBLE
             holder.createPlaylist.setOnClickListener { _ ->
                 playlistNameDialog(context, R.string.create_playlist, "",
                     { ItemManipulator.getDefaultPlaylistFile(it) }) { path ->

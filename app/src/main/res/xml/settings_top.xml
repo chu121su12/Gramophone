@@ -48,6 +48,13 @@
         app:isPreferenceVisible="false" />
 
     <Preference
+        android:icon="@drawable/ic_share_24"
+        android:key="sharing"
+        android:layout="@layout/preference_basic"
+        android:summary="@string/settings_library_sharing_summary"
+        android:title="@string/settings_library_sharing" />
+
+    <Preference
         android:icon="@drawable/ic_dashboard_customize"
         android:key="personalization"
         android:layout="@layout/preference_basic"

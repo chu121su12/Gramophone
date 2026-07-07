@@ -20,6 +20,7 @@ package org.akanework.gramophone.ui.fragments.settings
 import android.os.Bundle
 import androidx.preference.Preference
 import org.akanework.gramophone.R
+import org.akanework.gramophone.logic.sharing.LibrarySharingManager
 import org.akanework.gramophone.ui.fragments.BasePreferenceFragment
 import org.akanework.gramophone.ui.fragments.BaseSettingsActivity
 
@@ -30,6 +31,8 @@ class MainSettingsActivity : BaseSettingsActivity(
 class MainSettingsFragment : BasePreferenceFragment() {
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
         setPreferencesFromResource(R.xml.settings_top, rootKey)
+        findPreference<Preference>("sharing")?.isVisible =
+            LibrarySharingManager.remoteReader.value == null
     }
 
     override fun onPreferenceTreeClick(preference: Preference): Boolean {
@@ -48,6 +51,10 @@ class MainSettingsFragment : BasePreferenceFragment() {
 
             "player" -> {
                 startActivity(PlayerSettingsActivity::class.java)
+            }
+
+            "sharing" -> {
+                startActivity(LibrarySharingSettingsActivity::class.java)
             }
 
             "audio" -> {

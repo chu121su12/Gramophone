@@ -47,6 +47,7 @@ import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.annotation.RequiresApi
+import androidx.appcompat.app.AlertDialog
 import androidx.core.app.ActivityCompat
 import androidx.core.content.IntentCompat
 import androidx.core.content.pm.ShortcutManagerCompat
@@ -57,6 +58,9 @@ import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentManager
 import androidx.fragment.app.FragmentManager.FragmentLifecycleCallbacks
 import androidx.fragment.app.commit
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.util.Log
@@ -82,6 +86,8 @@ import org.akanework.gramophone.logic.hasScopedStorageV2
 import org.akanework.gramophone.logic.hasScopedStorageWithMediaTypes
 import org.akanework.gramophone.logic.needsMissingOnDestroyCallWorkarounds
 import org.akanework.gramophone.logic.postAtFrontOfQueueAsync
+import org.akanework.gramophone.logic.sharing.LibrarySharingManager
+import org.akanework.gramophone.logic.sharing.isRemoteMediaItem
 import org.akanework.gramophone.logic.ui.BaseActivity
 import org.akanework.gramophone.ui.adapters.PlaylistAdapter
 import org.akanework.gramophone.ui.components.PlayerBottomSheet
@@ -110,6 +116,8 @@ class MainActivity : BaseActivity() {
         const val PLAYBACK_AUTO_START_FOR_FGS = "AutoStartFgs"
         const val PLAYBACK_AUTO_PLAY_ID = "AutoStartId"
         const val PLAYBACK_AUTO_PLAY_POSITION = "AutoStartPos"
+        const val ACTION_SHOW_REMOTE_LIBRARY =
+            "org.akanework.gramophone.action.SHOW_REMOTE_LIBRARY"
         const val FAVORITE_ENTRY = "FavoriteEntry"
         const val FAVORITE_STATE = "FavoriteState"
     }
@@ -130,6 +138,7 @@ class MainActivity : BaseActivity() {
     private var pendingPlaylistRequest: Bundle? = null
     private var pendingDeleteRequest: Bundle? = null
     private var pendingMarkIsFavoriteRequest: Bundle? = null
+    private var reconnectDialog: AlertDialog? = null
 
     fun updateLibrary(smartScanFirst: Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R,
                       then: (() -> Unit)? = null) {
@@ -221,6 +230,21 @@ class MainActivity : BaseActivity() {
             })
         }
         playerBottomSheet = findViewById(R.id.player_layout)
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                launch {
+                    LibrarySharingManager.remoteDisconnectEvents.collect {
+                        restoreLocalPlaybackWhenAvailable()
+                        showLibraryRoot()
+                    }
+                }
+                launch {
+                    LibrarySharingManager.autoReconnectCandidate.collect { candidate ->
+                        updateAutoReconnectDialog(candidate)
+                    }
+                }
+            }
+        }
 
         // Check all permissions.
         if (!hasAudioPermission()) {
@@ -252,6 +276,11 @@ class MainActivity : BaseActivity() {
 
     @OptIn(FlowPreview::class)
     fun addToPlaylistDialog(item: MediaItem) {
+        if (item.isRemoteMediaItem()) {
+            Toast.makeText(this, R.string.library_sharing_readonly_action, Toast.LENGTH_SHORT)
+                .show()
+            return
+        }
         val song = Entry.ofMediaItem(item)
         if (song == null) {
             Toast.makeText(
@@ -467,13 +496,22 @@ class MainActivity : BaseActivity() {
     override fun onNewIntent(intent: Intent) {
         Log.i("MainActivity", "onNewIntent($intent)")
         super.onNewIntent(intent)
+        setIntent(intent)
         if (ready) {
-            doPlayFromIntent(intent)
+            if (intent.action == ACTION_SHOW_REMOTE_LIBRARY) {
+                showRemoteLibraryRoot()
+            } else {
+                doPlayFromIntent(intent)
+            }
         }
     }
 
     private fun doPlayFromIntent(intent: Intent) {
         Log.i("MainActivity", "doPlayFromIntent($intent)")
+        if (intent.action == ACTION_SHOW_REMOTE_LIBRARY) {
+            showRemoteLibraryRoot()
+            return
+        }
         val autoPlayId = intent.extras?.getString(PLAYBACK_AUTO_PLAY_ID) ?: (if
                 (intent.action == "org.akanework.gramophone.action.PLAY_MEDIA_FROM_SUGGESTION")
                 intent.data?.let {
@@ -735,6 +773,8 @@ class MainActivity : BaseActivity() {
     fun onLibraryLoaded() {
         Log.i("MainActivity", "onLibraryLoaded()")
         doPlayFromIntent(intent)
+        LibrarySharingManager.startAutoReconnectIfNeeded()
+        clearDisconnectedRemotePlaybackWhenAvailable()
     }
 
     fun maybeReportFullyDrawn() {
@@ -784,6 +824,90 @@ class MainActivity : BaseActivity() {
         }
     }
 
+    fun showLibraryRoot() {
+        supportFragmentManager.popBackStack(null, FragmentManager.POP_BACK_STACK_INCLUSIVE)
+        supportFragmentManager.commit {
+            replace(R.id.container, ViewPagerFragment())
+        }
+    }
+
+    fun showRemoteLibraryRoot() {
+        if (!LibrarySharingManager.activateConnectedRemoteLibrary()) return
+        getPlayer()?.let {
+            LibrarySharingManager.enterRemotePlayback(it)
+        } ?: controllerViewModel.addControllerCallback(lifecycle) { controller, _ ->
+            LibrarySharingManager.enterRemotePlayback(controller)
+            dispose()
+        }
+        showLibraryRoot()
+    }
+
+    fun showLocalLibraryRoot() {
+        getPlayer()?.let {
+            LibrarySharingManager.switchToLocalPlayback(it)
+            showLibraryRoot()
+        } ?: controllerViewModel.addControllerCallback(lifecycle) { controller, _ ->
+            LibrarySharingManager.switchToLocalPlayback(controller)
+            showLibraryRoot()
+            dispose()
+        }
+    }
+
+    fun disconnectSharedLibrary() {
+        if (isRemoteLibrary) {
+            restoreLocalPlaybackWhenAvailable()
+        }
+        LibrarySharingManager.disconnectRemote(notifyDisconnect = false)
+        showLibraryRoot()
+    }
+
+    private fun updateAutoReconnectDialog(
+        candidate: LibrarySharingManager.ReconnectCandidate?
+    ) {
+        if (candidate == null) {
+            reconnectDialog?.dismiss()
+            reconnectDialog = null
+            return
+        }
+        if (reconnectDialog?.isShowing == true) return
+        val label = candidate.deviceName ?: candidate.host
+        reconnectDialog = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.library_sharing_reconnect_title)
+            .setMessage(getString(R.string.library_sharing_reconnect_message, label))
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                LibrarySharingManager.acceptAutoReconnect()
+                showRemoteLibraryRoot()
+            }
+            .setNegativeButton(android.R.string.cancel) { _, _ ->
+                LibrarySharingManager.rejectAutoReconnect()
+                clearDisconnectedRemotePlaybackWhenAvailable()
+            }
+            .setOnCancelListener {
+                LibrarySharingManager.rejectAutoReconnect()
+                clearDisconnectedRemotePlaybackWhenAvailable()
+            }
+            .create()
+            .also { it.show() }
+    }
+
+    private fun clearDisconnectedRemotePlaybackWhenAvailable() {
+        getPlayer()?.let {
+            LibrarySharingManager.clearDisconnectedRemotePlayback(it)
+        } ?: controllerViewModel.addControllerCallback(lifecycle) { controller, _ ->
+            LibrarySharingManager.clearDisconnectedRemotePlayback(controller)
+            dispose()
+        }
+    }
+
+    private fun restoreLocalPlaybackWhenAvailable() {
+        getPlayer()?.let {
+            LibrarySharingManager.restoreLocalPlayback(it)
+        } ?: controllerViewModel.addControllerCallback(lifecycle) { controller, _ ->
+            LibrarySharingManager.restoreLocalPlayback(controller)
+            dispose()
+        }
+    }
+
     override fun onDestroy() {
         // https://github.com/androidx/media/issues/805
         if (needsMissingOnDestroyCallWorkarounds()
@@ -805,5 +929,11 @@ class MainActivity : BaseActivity() {
     fun getPlayer() = controllerViewModel.get()
 
     inline val reader
-        get() = gramophoneApplication.reader
+        get() = LibrarySharingManager.remoteReader.value ?: gramophoneApplication.reader
+
+    inline val isRemoteLibrary
+        get() = LibrarySharingManager.remoteReader.value != null
+
+    inline val hasConnectedRemoteLibrary
+        get() = LibrarySharingManager.connectedRemoteReader() != null
 }

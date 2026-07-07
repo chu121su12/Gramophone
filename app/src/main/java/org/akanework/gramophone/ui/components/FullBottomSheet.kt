@@ -104,6 +104,7 @@ import org.akanework.gramophone.logic.getTimer
 import org.akanework.gramophone.logic.playOrPause
 import org.akanework.gramophone.logic.setTextAnimation
 import org.akanework.gramophone.logic.setTimer
+import org.akanework.gramophone.logic.sharing.isRemoteMediaItem
 import org.akanework.gramophone.logic.startAnimation
 import org.akanework.gramophone.logic.updateMargin
 import org.akanework.gramophone.logic.utils.AudioFormatDetector
@@ -1689,13 +1690,14 @@ class FullBottomSheet
     }
 
     override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
+        val isRemote = instance?.currentMediaItem?.isRemoteMediaItem() == true
         val isHeart = (mediaMetadata.userRating as? HeartRating)?.isHeart == true
-        if (bottomSheetFavoriteButton.isChecked != isHeart) {
-            bottomSheetFavoriteButton.removeOnCheckedChangeListener(this)
-            bottomSheetFavoriteButton.isChecked =
-                (mediaMetadata.userRating as? HeartRating)?.isHeart == true
+        bottomSheetFavoriteButton.removeOnCheckedChangeListener(this)
+        bottomSheetFavoriteButton.isEnabled = !isRemote
+        bottomSheetFavoriteButton.isChecked = !isRemote && isHeart
+        if (!isRemote) {
+            bottomSheetFavoriteButton.addOnCheckedChangeListener(this) // see onCheckedChanged
         }
-        bottomSheetFavoriteButton.addOnCheckedChangeListener(this) // see onCheckedChanged
     }
 
     private fun updateDuration() {
@@ -1721,6 +1723,12 @@ class FullBottomSheet
 
     override fun onCheckedChanged(button: MaterialButton?, isChecked: Boolean) {
         instance?.currentMediaItem?.let { song ->
+            if (song.isRemoteMediaItem()) {
+                bottomSheetFavoriteButton.removeOnCheckedChangeListener(this)
+                bottomSheetFavoriteButton.isChecked = false
+                bottomSheetFavoriteButton.addOnCheckedChangeListener(this)
+                return
+            }
             val entry = Entry.ofMediaItem(song)
             if (entry != null)
                 activity.markIsFavoriteStatus(listOf(entry), isChecked)

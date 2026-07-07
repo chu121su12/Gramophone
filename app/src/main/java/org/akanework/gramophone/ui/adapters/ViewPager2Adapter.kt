@@ -34,6 +34,7 @@ import com.google.android.material.tabs.TabLayout
 import org.akanework.gramophone.R
 import org.akanework.gramophone.logic.getStringStrict
 import org.akanework.gramophone.logic.hasImprovedMediaStore
+import org.akanework.gramophone.logic.sharing.LibrarySharingManager
 import org.akanework.gramophone.ui.MainActivity
 import org.akanework.gramophone.ui.fragments.AdapterFragment
 
@@ -49,7 +50,7 @@ class ViewPager2Adapter(
     SharedPreferences.OnSharedPreferenceChangeListener, DefaultLifecycleObserver {
 
     private val prefs = PreferenceManager.getDefaultSharedPreferences(context.applicationContext)
-    private var tabs = mapSettingToTabList(prefs.getStringStrict("tabs", "")!!)
+    private var tabs = buildTabs()
 
     init {
         prefs.registerOnSharedPreferenceChangeListener(this)
@@ -64,7 +65,7 @@ class ViewPager2Adapter(
     override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
         if (key != "tabs") return
         val currentItemId = tabs[viewPager2.currentItem]
-        tabs = mapSettingToTabList(prefs.getStringStrict("tabs", "")!!)
+        tabs = buildTabs()
         viewPager2.adapter!!.notifyDataSetChanged()
         if (tabs.contains(currentItemId)) {
             val newPosition = tabs.indexOfFirst { it == currentItemId }
@@ -82,6 +83,17 @@ class ViewPager2Adapter(
     }
 
     fun getLabelResId(position: Int) = tabs[position]!!.label
+
+    private fun buildTabs(): List<Tab?> {
+        val allTabs = mapSettingToTabList(prefs.getStringStrict("tabs", "")!!)
+        val remoteFoldersAllowed = (context as? MainActivity)?.isRemoteLibrary != true ||
+                LibrarySharingManager.remoteReader.value?.remoteLibrary?.allowFolderTabs == true
+        return if (remoteFoldersAllowed) {
+            allTabs
+        } else {
+            allTabs.filter { it != Tab.Folders && it != Tab.FileSystem }
+        }
+    }
 
     override fun getItemCount() = tabs.indexOf(null)
         .also { if (it == -1) throw IllegalStateException("indexOf null is -1 in tab list?") }

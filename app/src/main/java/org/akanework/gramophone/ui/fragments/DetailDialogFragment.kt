@@ -23,6 +23,8 @@ import org.akanework.gramophone.logic.enableEdgeToEdgePaddingListener
 import org.akanework.gramophone.logic.getBitrate
 import org.akanework.gramophone.logic.getFile
 import org.akanework.gramophone.logic.hasImprovedMediaStore
+import org.akanework.gramophone.logic.sharing.isRemoteMediaItem
+import org.akanework.gramophone.logic.sharing.remoteMimeType
 import org.akanework.gramophone.logic.toLocaleString
 import org.akanework.gramophone.logic.toMediaStoreId
 import org.akanework.gramophone.logic.ui.placeholderScaleToFit
@@ -41,8 +43,17 @@ class DetailDialogFragment : BaseFragment(false) {
         rootView.findViewById<MaterialToolbar>(R.id.topAppBar).setNavigationOnClickListener {
             requireActivity().supportFragmentManager.popBackStack()
         }
-        val id = requireArguments().getString("Id")?.toMediaStoreId()
-        val mediaItem = runBlocking { mainActivity.reader.idMapFlow.map { it[id] }.first() }
+        val rawId = requireArguments().getString("Id")
+        val id = rawId?.toMediaStoreId()
+        val mediaItem = runBlocking {
+            if (id != null) {
+                mainActivity.reader.idMapFlow.map { it[id] }.first()
+            } else {
+                mainActivity.reader.songListFlow.map { list ->
+                    list.find { it.mediaId == rawId }
+                }.first()
+            }
+        }
         if (mediaItem == null) {
             parentFragmentManager.popBackStack()
             return null
@@ -60,8 +71,10 @@ class DetailDialogFragment : BaseFragment(false) {
         val albumTextView = rootView.findViewById<TextView>(R.id.album)
         val durationTextView = rootView.findViewById<TextView>(R.id.duration)
         val mimeTypeTextView = rootView.findViewById<TextView>(R.id.mime)
+        val pathBox = rootView.findViewById<View>(R.id.path_box)
         val pathTextView = rootView.findViewById<TextView>(R.id.path)
         val bitRateTextView = rootView.findViewById<TextView>(R.id.bit_rate)
+        val isRemote = mediaItem.isRemoteMediaItem()
         albumCoverImageView.load(mediaMetadata.artworkUri) {
             placeholderScaleToFit(R.drawable.ic_default_cover)
             crossfade(true)
@@ -85,17 +98,24 @@ class DetailDialogFragment : BaseFragment(false) {
                 (mediaMetadata.releaseYear ?: mediaMetadata.recordingYear)?.toLocaleString()
         }
         mediaMetadata.durationMs?.let { durationTextView.text = convertDurationToTimeStamp(it) }
-        mimeTypeTextView.text = mediaItem.localConfiguration?.mimeType ?: "(null)"
-        pathTextView.text = mediaItem.getFile()?.path
-            ?: mediaItem.requestMetadata.mediaUri?.toString() ?: "(null)"
-        val context = requireContext().applicationContext
-        CoroutineScope(Dispatchers.IO).launch {
-            val bitrate = mediaItem.getBitrate(context) // disk access
-            withContext(Dispatchers.Main) {
-                bitRateTextView.text = if (bitrate != null) {
-                    getString(R.string.bitrate_format, bitrate / 1000)
-                } else {
-                    getString(R.string.bitrate_unknown)
+        mimeTypeTextView.text = mediaItem.localConfiguration?.mimeType
+            ?: mediaItem.remoteMimeType()
+            ?: "(null)"
+        if (isRemote) {
+            pathBox.visibility = View.GONE
+            bitRateTextView.text = getString(R.string.library_sharing_playback_only_metadata)
+        } else {
+            pathTextView.text = mediaItem.getFile()?.path
+                ?: mediaItem.requestMetadata.mediaUri?.toString() ?: "(null)"
+            val context = requireContext().applicationContext
+            CoroutineScope(Dispatchers.IO).launch {
+                val bitrate = mediaItem.getBitrate(context) // disk access
+                withContext(Dispatchers.Main) {
+                    bitRateTextView.text = if (bitrate != null) {
+                        getString(R.string.bitrate_format, bitrate / 1000)
+                    } else {
+                        getString(R.string.bitrate_unknown)
+                    }
                 }
             }
         }

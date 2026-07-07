@@ -173,7 +173,18 @@ object LrcUtils {
                 return parseLyrics(it, audioMimeType, parserOptions, format)
             }
         }
-        return null
+        return loadTextFile(
+            musicFile.resolveSibling(musicFile.nameWithoutExtension + ".ttml"),
+            parserOptions.errorText
+        )?.let { parseLyrics(it, audioMimeType, parserOptions, LyricFormat.TTML) }
+            ?: loadTextFile(
+                musicFile.resolveSibling(musicFile.nameWithoutExtension + ".srt"),
+                parserOptions.errorText
+            )?.let { parseLyrics(it, audioMimeType, parserOptions, LyricFormat.SRT) }
+            ?: loadTextFile(
+                musicFile.resolveSibling(musicFile.nameWithoutExtension + ".lrc"),
+                parserOptions.errorText
+            )?.let { parseLyrics(it, audioMimeType, parserOptions, LyricFormat.LRC) }
     }
 
     private fun loadTextFile(context: Context, lrcFile: Uri, errorText: String?): String? {

@@ -50,6 +50,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.akanework.gramophone.BuildConfig
 import org.akanework.gramophone.R
+import org.akanework.gramophone.logic.sharing.LibrarySharingManager
 import org.akanework.gramophone.logic.ui.BugHandlerActivity
 import org.akanework.gramophone.logic.utils.CoilArtPipeline
 import org.akanework.gramophone.ui.LyricWidgetProvider
@@ -231,6 +232,7 @@ class GramophoneApplication : Application(), SingletonImageLoader.Factory,
             })
         }
         uacManager = UacManager(this)
+        LibrarySharingManager.init(this)
         reader = FlowReader(
             this,
             if (BuildConfig.DISABLE_MEDIA_STORE_FILTER) MutableStateFlow(0) else
@@ -241,6 +243,7 @@ class GramophoneApplication : Application(), SingletonImageLoader.Factory,
                 shouldUseEnhancedCoverReadingFlow!!,
             recentlyAddedFilterSecondFlow
         )
+        LibrarySharingManager.setSharingEnabled(prefs.getBoolean("library_sharing_enabled", false))
         // Set application theme when launching.
         when (prefs.getString("theme_mode", "0")) {
             "0" -> {
@@ -305,6 +308,14 @@ class GramophoneApplication : Application(), SingletonImageLoader.Factory,
             }
             if ((key == null || key == "album_covers") && !hasScopedStorageWithMediaTypes()) {
                 shouldUseEnhancedCoverReadingFlow!!.emit(prefs.getBoolean("album_covers", true))
+            }
+            if (key == null || key == "library_sharing_enabled") {
+                LibrarySharingManager.setSharingEnabled(
+                    prefs.getBoolean("library_sharing_enabled", false)
+                )
+            }
+            if (key == "library_sharing_keep_alive") {
+                LibrarySharingManager.refreshKeepAliveService()
             }
         }
     }

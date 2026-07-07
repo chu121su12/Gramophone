@@ -25,10 +25,12 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.PopupMenu
 import androidx.core.app.ShareCompat
+import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.session.SessionResult
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -43,7 +45,10 @@ import org.akanework.gramophone.logic.getFile
 import org.akanework.gramophone.logic.gramophoneApplication
 import org.akanework.gramophone.logic.requireMediaStoreId
 import org.akanework.gramophone.logic.setMediaItemsSeamlessly
+import org.akanework.gramophone.logic.sharing.LibrarySharingManager
+import org.akanework.gramophone.logic.sharing.isRemoteMediaItem
 import org.akanework.gramophone.logic.ui.MyRecyclerView
+import org.akanework.gramophone.ui.MainActivity
 import org.akanework.gramophone.ui.MediaControllerViewModel
 import org.akanework.gramophone.ui.SongPickerActivity
 import org.akanework.gramophone.ui.components.NowPlayingDrawable
@@ -65,8 +70,11 @@ import java.util.GregorianCalendar
 class SongAdapter(
     fragment: Fragment?,
     val queueTitle: Flow<String>?,
-    songList: Flow<List<MediaItem>?> = (fragment?.requireContext() ?: fallbackContext!!)
-        .gramophoneApplication.reader.songListFlow,
+    songList: Flow<List<MediaItem>?> =
+        ((fragment?.requireActivity() as? MainActivity)?.reader
+            ?: (fallbackContext as? MainActivity)?.reader
+            ?: (fragment?.requireContext() ?: fallbackContext!!).gramophoneApplication.reader)
+            .songListFlow,
     helper: Sorter.NaturalOrderHelper<MediaItem>? = null,
     isSubFragment: Int? = null,
     allowDiffUtils: Boolean = false,
@@ -227,17 +235,30 @@ class SongAdapter(
             // UX of Chinese players that open full player when clicking song, and we don't want
             // this UX to break if list is different for some reason.
             val currentItem = currentMediaItem
-            setMediaItemsSeamlessly(songList, position, title)
-            prepare()
-            play()
-            if (currentItem?.mediaId == songList[position].mediaId) {
-                mainActivity.playerBottomSheet.open()
-            }
+            val command = setMediaItemsSeamlessly(songList, position, title)
+            command.addListener(
+                {
+                    val result = runCatching { command.get() }.getOrNull()
+                    if (result?.resultCode == SessionResult.RESULT_SUCCESS) {
+                        prepare()
+                        play()
+                        if (currentItem?.mediaId == songList[position].mediaId) {
+                            mainActivity.playerBottomSheet.open()
+                        }
+                    }
+                },
+                ContextCompat.getMainExecutor(mainActivity)
+            )
         }
     }
 
     override fun onMenu(item: MediaItem, popupMenu: PopupMenu) {
         popupMenu.inflate(R.menu.more_menu)
+        if (item.isRemoteMediaItem()) {
+            popupMenu.menu.findItem(R.id.delete).isVisible = false
+            popupMenu.menu.findItem(R.id.share).isVisible = false
+            popupMenu.menu.findItem(R.id.add_to_playlist).isVisible = false
+        }
 
         popupMenu.setOnMenuItemClickListener { it1 ->
             when (it1.itemId) {
@@ -247,6 +268,7 @@ class SongAdapter(
                         mediaController.currentMediaItemIndex + 1,
                         item,
                     )
+                    LibrarySharingManager.prefetchQueuedNext(listOf(item))
                     true
                 }
 

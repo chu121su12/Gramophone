@@ -113,6 +113,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import org.akanework.gramophone.R
+import org.akanework.gramophone.logic.sharing.LibrarySharingManager
+import org.akanework.gramophone.logic.sharing.isRemoteMediaItem
 import org.akanework.gramophone.logic.ui.MeiZuLyricsMediaNotificationProvider
 import org.akanework.gramophone.logic.ui.isManualNotificationUpdate
 import org.akanework.gramophone.logic.utils.AfFormatInfo
@@ -561,6 +563,8 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                         throw IllegalStateException("shuffleFactory was found orphaned")
                     if (endedWorkaroundPlayer?.nextTitle != null)
                         throw IllegalStateException("title was found orphaned")
+                    if (LibrarySharingManager.isRestoredRemotePlayback(items.mediaItems))
+                        return@restore
                     if (lastPlayedManager.allowSavingState)
                         return@restore // media items were already applied to player
                     endedWorkaroundPlayer?.nextShuffleOrder = factory.toFactory()
@@ -992,7 +996,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
             val position = customCommand.customExtras.getInt("position")
             val title = customCommand.customExtras.getString("title")!!
             return Futures.transform(
-                onAddMediaItems(session, controller, songList),
+                prepareMediaItemsForPlayback(session, controller, songList, position),
                 { songList ->
                     val currentItem = endedWorkaroundPlayer!!.currentMediaItem
                     if (currentItem?.mediaId == songList[position].mediaId) {
@@ -1202,6 +1206,12 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                         throw IllegalStateException("shuffleFactory was found orphaned")
                     if (endedWorkaroundPlayer?.nextTitle != null)
                         throw IllegalStateException("title was found orphaned")
+                    if (LibrarySharingManager.isRestoredRemotePlayback(items.mediaItems)) {
+                        settable.setException(
+                            IllegalStateException("Remote library is not connected")
+                        )
+                        return@restore
+                    }
                     if (isForPlayback && items.mediaItems.isNotEmpty()) {
                         val list = runBlocking { mapMediaItemsForFavorites(items.mediaItems) }
                         endedWorkaroundPlayer?.nextShuffleOrder = factory.toFactory()
@@ -1476,6 +1486,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
             )
         }
 
+        player?.let { LibrarySharingManager.prefetchAround(it) }
         lastPlayedManager.save()
     }
 
@@ -1525,7 +1536,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         startPositionMs: Long
     ): ListenableFuture<MediaItemsWithStartPosition> {
         return Util.transformFutureAsync(
-            onAddMediaItems(mediaSession, controller, mediaItems),
+            prepareMediaItemsForPlayback(mediaSession, controller, mediaItems, startIndex),
             { mediaItems ->
                 val title = mediaItems.firstOrNull()?.mediaMetadata?.extras
                     ?.getString("mq_title")
@@ -1583,6 +1594,33 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
             })
     }
 
+    private fun prepareMediaItemsForPlayback(
+        mediaSession: MediaSession,
+        controller: MediaSession.ControllerInfo,
+        mediaItems: List<MediaItem>,
+        startIndex: Int
+    ): ListenableFuture<List<MediaItem>> {
+        return Util.transformFutureAsync(
+            onAddMediaItems(mediaSession, controller, mediaItems),
+            { addedItems ->
+                val completion = SettableFuture.create<List<MediaItem>>()
+                lifecycleScope.launch(Dispatchers.IO) {
+                    try {
+                        completion.set(
+                            LibrarySharingManager.resolveRemoteQueueForPlayback(
+                                addedItems,
+                                startIndex
+                            )
+                        )
+                    } catch (e: Exception) {
+                        completion.setException(e)
+                    }
+                }
+                completion
+            }
+        )
+    }
+
     override fun onAddMediaItems(
         mediaSession: MediaSession,
         controller: MediaSession.ControllerInfo,
@@ -1592,7 +1630,9 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         lifecycleScope.launch(Dispatchers.Default) {
             try {
                 val result = mediaItems.flatMap {
-                    if (it.localConfiguration != null)
+                    if (it.isRemoteMediaItem())
+                        listOf(it)
+                    else if (it.localConfiguration != null)
                         listOf(it)
                     else if (it.mediaId != MediaItem.DEFAULT_MEDIA_ID)
                         gramophoneApplication.reader.songListFlow.first()
@@ -1602,7 +1642,11 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                     else
                         throw UnsupportedOperationException("can't do anything with $it")
                 }
-                completion.set(mapMediaItemsForFavorites(result))
+                completion.set(
+                    mapMediaItemsForFavorites(
+                        LibrarySharingManager.prepareRemotePlaybackShells(result)
+                    )
+                )
             } catch (e: UnsupportedOperationException) {
                 completion.setException(e)
             }

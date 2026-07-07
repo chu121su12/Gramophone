@@ -30,6 +30,8 @@ import kotlinx.coroutines.withContext
 import org.akanework.gramophone.R
 import org.akanework.gramophone.logic.getFile
 import org.akanework.gramophone.logic.requireMediaStoreId
+import org.akanework.gramophone.logic.sharing.LibrarySharingManager
+import org.akanework.gramophone.logic.sharing.isRemoteMediaItem
 import org.akanework.gramophone.ui.MainActivity
 import org.akanework.gramophone.ui.fragments.GeneralSubFragment
 import uk.akane.libphonograph.items.Album
@@ -76,7 +78,8 @@ class AlbumAdapter(
         popupMenu.inflate(R.menu.more_menu)
         popupMenu.menu.iterator().forEach {
             it.isVisible = it.itemId == R.id.play_next || it.itemId == R.id.add_to_queue
-                    || it.itemId == R.id.delete
+                    || (!item.songList.any { song -> song.isRemoteMediaItem() } &&
+                    it.itemId == R.id.delete)
         }
         popupMenu.setOnMenuItemClickListener { it1 ->
             when (it1.itemId) {
@@ -86,6 +89,7 @@ class AlbumAdapter(
                         mediaController.currentMediaItemIndex + 1,
                         item.songList,
                     )
+                    LibrarySharingManager.prefetchQueuedNext(item.songList)
                 }
 
                 R.id.add_to_queue -> {
