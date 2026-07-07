@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <PreferenceCategory
+        android:key="library_sharing_server_category"
+        android:title="@string/library_sharing_server">
+
+        <SwitchPreferenceCompat
+            android:defaultValue="false"
+            android:key="library_sharing_enabled"
+            android:layout="@layout/preference_switch"
+            android:summary="@string/library_sharing_enabled_summary"
+            android:title="@string/library_sharing_enabled"
+            android:widgetLayout="@layout/preference_switch_widget"
+            app:iconSpaceReserved="false" />
+
+        <SwitchPreferenceCompat
+            android:defaultValue="false"
+            android:key="library_sharing_keep_alive"
+            android:layout="@layout/preference_switch"
+            android:summary="@string/library_sharing_keep_alive_summary"
+            android:title="@string/library_sharing_keep_alive"
+            android:widgetLayout="@layout/preference_switch_widget"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:key="library_sharing_port"
+            android:layout="@layout/preference_basic"
+            android:summary="@string/library_sharing_port_summary"
+            android:title="@string/library_sharing_port" />
+
+        <SwitchPreferenceCompat
+            android:defaultValue="false"
+            android:key="library_sharing_allow_folder_tabs"
+            android:layout="@layout/preference_switch"
+            android:summary="@string/library_sharing_allow_folder_tabs_summary"
+            android:title="@string/library_sharing_allow_folder_tabs"
+            android:widgetLayout="@layout/preference_switch_widget"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:key="library_sharing_address"
+            android:layout="@layout/preference_basic"
+            android:selectable="false"
+            android:title="@string/library_sharing_address" />
+
+        <Preference
+            android:key="library_sharing_clients"
+            android:layout="@layout/preference_basic"
+            android:title="@string/library_sharing_clients" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:key="library_sharing_client_category"
+        android:title="@string/library_sharing_client">
+
+        <SwitchPreferenceCompat
+            android:defaultValue="true"
+            android:key="library_sharing_auto_reconnect"
+            android:layout="@layout/preference_switch"
+            android:summary="@string/library_sharing_auto_reconnect_summary"
+            android:title="@string/library_sharing_auto_reconnect"
+            android:widgetLayout="@layout/preference_switch_widget"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:key="library_sharing_load"
+            android:layout="@layout/preference_basic"
+            android:summary="@string/library_sharing_load_library_summary"
+            android:title="@string/library_sharing_load_library" />
+
+        <Preference
+            android:key="library_sharing_saved_servers"
+            android:layout="@layout/preference_basic"
+            android:title="@string/library_sharing_saved_servers" />
+
+        <Preference
+            android:key="library_sharing_clear_cache"
+            android:layout="@layout/preference_basic"
+            android:summary="@string/library_sharing_clear_cache_summary"
+            android:title="@string/library_sharing_clear_cache" />
+
+        <Preference
+            android:key="library_sharing_debug_local"
+            android:layout="@layout/preference_basic"
+            android:summary="@string/library_sharing_debug_local_summary"
+            android:title="@string/library_sharing_debug_local" />
+    </PreferenceCategory>
+
+</PreferenceScreen>
